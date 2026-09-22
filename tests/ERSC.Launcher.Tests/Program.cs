@@ -24,6 +24,7 @@ var tests = new (string Name, Action Run)[]
     ,("Launcher downloads reject corrupt and incomplete executables", TestLauncherDownload)
     ,("Launcher replacement preserves its path and restores on failure", TestLauncherReplacement)
     ,("Failed launcher update reports the error on the next launch", TestLauncherError)
+    ,("Published launcher updates an older portable file", TestLiveLauncherUpdate)
 };
 var failed = 0;
 foreach (var test in tests)
@@ -244,6 +245,24 @@ static void TestLauncherError()
     LauncherUpdateErrors.Write(folder, "Access denied");
     Equal("Access denied", LauncherUpdateErrors.Take(folder));
     True(LauncherUpdateErrors.Take(folder) is null);
+}
+static void TestLiveLauncherUpdate()
+{
+    if (Environment.GetEnvironmentVariable("ERSC_LIVE_LAUNCHER_UPDATE") != "1") { Console.WriteLine("  SKIP: set ERSC_LIVE_LAUNCHER_UPDATE=1 for public release integration"); return; }
+    using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+    var release = new GitHubLauncherReleases(client, "maxazarcon/ERSC-Launcher").GetNewerAsync(new Version(1, 1, 1)).GetAwaiter().GetResult();
+    True(release is not null && LauncherUpdates.ParseVersion(release.Tag)! > new Version(1, 1, 1));
+    var asset = LauncherUpdates.SelectAsset(release!, "maxazarcon/ERSC-Launcher");
+    var root = Temp(); var downloaded = Path.Combine(root, asset.Name);
+    LauncherUpdates.DownloadAsync(client, asset, downloaded).GetAwaiter().GetResult();
+    var app = Path.Combine(root, "Friends Launcher.exe"); var backup = Path.Combine(root, "previous.exe");
+    File.WriteAllText(app, "older portable build");
+    string? started = null;
+    LauncherReplacement.Replace(app, downloaded, backup, path => started = path);
+    Equal(app, started);
+    Equal("older portable build", File.ReadAllText(backup));
+    using var updated = File.OpenRead(app);
+    Equal(asset.Digest![7..].ToUpperInvariant(), Convert.ToHexString(SHA256.HashData(updated)));
 }
 static void Add(ZipArchive z, string name, string content) { using var w = new StreamWriter(z.CreateEntry(name).Open()); w.Write(content); }
 sealed class FakeHandler(Func<HttpRequestMessage, HttpResponseMessage> answer) : HttpMessageHandler
