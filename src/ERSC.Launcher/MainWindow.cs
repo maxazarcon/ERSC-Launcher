@@ -1,7 +1,9 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Net.Http;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
 using ERSC.Launcher.Core;
@@ -204,28 +206,107 @@ public sealed class MainWindow : Window
             string? section = null;
             foreach (var entry in _ini.Entries)
             {
+                var presentation = SettingPresentation.For(entry);
                 if (section != entry.Section)
                 {
                     section = entry.Section;
                     _settings.Children.Add(Label(section.Length == 0 ? "General" : section.Replace('_', ' '), 17, GoldBrush, new Thickness(0, 12, 0, 6)));
                 }
                 var card = Panel(); var wrapped = Wrap(card); wrapped.Margin = new Thickness(0, 0, 0, 8); _settings.Children.Add(wrapped);
-                card.Children.Add(Label(entry.Key.Replace('_', ' '), 14, TextBrush, new Thickness(0, 0, 0, 6)));
-                if (entry.Description is not null) card.Children.Add(Label(entry.Description, 12, MutedBrush, new Thickness(0, 0, 0, 7)));
-                if (entry.Key.Equals("cooppassword", StringComparison.OrdinalIgnoreCase))
-                {
-                    var password = new PasswordBox { Password = entry.Value, Background = BackgroundBrush, Foreground = TextBrush, BorderBrush = MutedBrush, Padding = new Thickness(8, 5, 8, 5) };
-                    password.PasswordChanged += (_, _) => UpdateButtons(); card.Children.Add(password);
-                    _editors.Add((entry, () => password.Password));
-                }
-                else
-                {
-                    var input = new TextBox { Text = entry.Value, Background = BackgroundBrush, Foreground = TextBrush, BorderBrush = MutedBrush, Padding = new Thickness(8, 5, 8, 5) };
-                    card.Children.Add(input); _editors.Add((entry, () => input.Text));
-                }
+                card.Children.Add(Label(presentation.Label, 14, TextBrush, new Thickness(0, 0, 0, 6)));
+                if (presentation.Help is not null) card.Children.Add(Label(presentation.Help, 12, MutedBrush, new Thickness(0, 0, 0, 7)));
+                var (control, read) = CreateEditor(entry, presentation);
+                card.Children.Add(control);
+                _editors.Add((entry, read));
             }
         }
         catch (Exception ex) { _settings.Children.Add(Label("Could not read settings: " + ex.Message, 14, MutedBrush, new Thickness(0))); }
+    }
+
+    private (UIElement Control, Func<string> Read) CreateEditor(IniEntry entry, SettingPresentation presentation)
+    {
+        switch (presentation.Kind)
+        {
+            case SettingKind.Toggle:
+            {
+                var toggle = new CheckBox { IsChecked = entry.Value == "1", Content = entry.Value == "1" ? "On" : "Off", Foreground = TextBrush, Cursor = System.Windows.Input.Cursors.Hand };
+                StyleToggle(toggle);
+                AutomationProperties.SetName(toggle, presentation.Label);
+                toggle.Checked += (_, _) => toggle.Content = "On";
+                toggle.Unchecked += (_, _) => toggle.Content = "Off";
+                return (toggle, () => toggle.IsChecked == true ? "1" : "0");
+            }
+            case SettingKind.Choice:
+            {
+                var choice = new ComboBox
+                {
+                    ItemsSource = presentation.Options, DisplayMemberPath = nameof(SettingOption.Label), SelectedValuePath = nameof(SettingOption.Value),
+                    SelectedValue = entry.Value, Width = 280, HorizontalAlignment = HorizontalAlignment.Left,
+                    Background = BackgroundBrush, Foreground = TextBrush, BorderBrush = MutedBrush, Padding = new Thickness(8, 5, 8, 5)
+                };
+                AutomationProperties.SetName(choice, presentation.Label);
+                return (choice, () => choice.SelectedValue?.ToString() ?? entry.Value);
+            }
+            case SettingKind.Slider:
+            {
+                var row = new DockPanel { LastChildFill = true };
+                var numeric = new TextBox
+                {
+                    Text = entry.Value, Width = 66, TextAlignment = TextAlignment.Right, Margin = new Thickness(12, 0, 0, 0),
+                    Background = BackgroundBrush, Foreground = TextBrush, BorderBrush = MutedBrush, Padding = new Thickness(5)
+                };
+                AutomationProperties.SetName(numeric, presentation.Label + " exact value");
+                if (presentation.Unit is not null)
+                {
+                    var unit = Label(presentation.Unit, 14, MutedBrush, new Thickness(5, 5, 0, 0));
+                    DockPanel.SetDock(unit, Dock.Right); row.Children.Add(unit);
+                }
+                DockPanel.SetDock(numeric, Dock.Right); row.Children.Add(numeric);
+                var slider = new Slider
+                {
+                    Minimum = presentation.Minimum, Maximum = presentation.Maximum,
+                    Value = int.Parse(entry.Value, CultureInfo.InvariantCulture),
+                    TickFrequency = 1, IsSnapToTickEnabled = true,
+                    VerticalAlignment = VerticalAlignment.Center, Foreground = GoldBrush
+                };
+                AutomationProperties.SetName(slider, presentation.Label);
+                row.Children.Add(slider);
+                var syncing = false;
+                slider.ValueChanged += (_, _) =>
+                {
+                    if (syncing) return;
+                    syncing = true; numeric.Text = ((int)Math.Round(slider.Value)).ToString(CultureInfo.InvariantCulture); syncing = false;
+                };
+                numeric.TextChanged += (_, _) =>
+                {
+                    if (syncing || !int.TryParse(numeric.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value)) return;
+                    if (presentation.Unit == "%") { slider.Minimum = Math.Min(slider.Minimum, value); slider.Maximum = Math.Max(slider.Maximum, value); }
+                    if (value < slider.Minimum || value > slider.Maximum) return;
+                    syncing = true; slider.Value = value; syncing = false;
+                };
+                return (row, () =>
+                {
+                    if (!int.TryParse(numeric.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value))
+                        throw new InvalidDataException(presentation.Label + " must be a whole number.");
+                    if (presentation.Unit is null && (value < presentation.Minimum || value > presentation.Maximum))
+                        throw new InvalidDataException(presentation.Label + " must be between " + presentation.Minimum + " and " + presentation.Maximum + ".");
+                    return value.ToString(CultureInfo.InvariantCulture);
+                });
+            }
+            case SettingKind.Password:
+            {
+                var password = new PasswordBox { Password = entry.Value, Background = BackgroundBrush, Foreground = TextBrush, BorderBrush = MutedBrush, Padding = new Thickness(8, 5, 8, 5) };
+                AutomationProperties.SetName(password, presentation.Label);
+                password.PasswordChanged += (_, _) => UpdateButtons();
+                return (password, () => password.Password);
+            }
+            default:
+            {
+                var input = new TextBox { Text = entry.Value, Background = BackgroundBrush, Foreground = TextBrush, BorderBrush = MutedBrush, Padding = new Thickness(8, 5, 8, 5) };
+                AutomationProperties.SetName(input, presentation.Label);
+                return (input, () => input.Text);
+            }
+        }
     }
 
     private bool SaveSettings()
@@ -294,5 +375,35 @@ public sealed class MainWindow : Window
         disabled.Setters.Add(new Setter(UIElement.OpacityProperty, 0.4));
         template.Triggers.Add(disabled);
         button.Template = template;
+    }
+
+    private static void StyleToggle(CheckBox toggle)
+    {
+        var row = new FrameworkElementFactory(typeof(StackPanel));
+        row.SetValue(StackPanel.OrientationProperty, Orientation.Horizontal);
+        var track = new FrameworkElementFactory(typeof(Border));
+        track.Name = "Track";
+        track.SetValue(FrameworkElement.WidthProperty, 44.0);
+        track.SetValue(FrameworkElement.HeightProperty, 24.0);
+        track.SetValue(Border.CornerRadiusProperty, new CornerRadius(12));
+        track.SetValue(Border.BackgroundProperty, MutedBrush);
+        var knob = new FrameworkElementFactory(typeof(System.Windows.Shapes.Ellipse));
+        knob.Name = "Knob";
+        knob.SetValue(FrameworkElement.WidthProperty, 18.0);
+        knob.SetValue(FrameworkElement.HeightProperty, 18.0);
+        knob.SetValue(FrameworkElement.MarginProperty, new Thickness(3));
+        knob.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Left);
+        knob.SetValue(System.Windows.Shapes.Shape.FillProperty, BackgroundBrush);
+        track.AppendChild(knob); row.AppendChild(track);
+        var text = new FrameworkElementFactory(typeof(ContentPresenter));
+        text.SetValue(FrameworkElement.MarginProperty, new Thickness(10, 2, 0, 0));
+        text.SetValue(ContentPresenter.ContentProperty, new TemplateBindingExtension(CheckBox.ContentProperty));
+        row.AppendChild(text);
+        var template = new ControlTemplate(typeof(CheckBox)) { VisualTree = row };
+        var on = new Trigger { Property = CheckBox.IsCheckedProperty, Value = true };
+        on.Setters.Add(new Setter(Border.BackgroundProperty, GoldBrush, "Track"));
+        on.Setters.Add(new Setter(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Right, "Knob"));
+        template.Triggers.Add(on);
+        toggle.Template = template;
     }
 }

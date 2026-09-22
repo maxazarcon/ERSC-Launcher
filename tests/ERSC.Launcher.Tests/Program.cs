@@ -18,6 +18,7 @@ var tests = new (string Name, Action Run)[]
     ,("Locked launcher leaves prior installation intact", TestLockedLauncher)
     ,("Current upstream ZIP extracts", TestRealArchive)
     ,("Live GitHub release downloads and validates", TestLiveRelease)
+    ,("Known settings choose controls without changing raw values", TestSettingControls)
 };
 var failed = 0;
 foreach (var test in tests)
@@ -168,6 +169,28 @@ static void TestLiveRelease()
     True(ModFingerprint.Matches(game, stage));
     True(StateStore.Matches(game, StateStore.Record(release.Tag, game, stage)));
     Console.WriteLine("  Verified " + release.Tag + " / " + asset.Name);
+}
+static void TestSettingControls()
+{
+    var ini = IniDocument.Parse("[GAMEPLAY]\nallow_invaders = 1\nallow_summons = 0\noverhead_player_display = 5\ndefault_boot_master_volume = 7\n[SCALING]\nenemy_health_scaling = 350\n[PASSWORD]\ncooppassword = secret\n[OTHER]\nfuture_setting = custom\n");
+    var entries = ini.Entries.ToDictionary(e => e.Key);
+    Equal(SettingKind.Toggle, SettingPresentation.For(entries["allow_invaders"]).Kind);
+    Equal(SettingKind.Toggle, SettingPresentation.For(entries["allow_summons"]).Kind);
+    var overhead = SettingPresentation.For(entries["overhead_player_display"]);
+    Equal(SettingKind.Choice, overhead.Kind);
+    Equal(6, overhead.Options.Count);
+    Equal("Soul level and ping", overhead.Options.Single(o => o.Value == "5").Label);
+    var volume = SettingPresentation.For(entries["default_boot_master_volume"]);
+    Equal(SettingKind.Slider, volume.Kind);
+    Equal(0, volume.Minimum); Equal(10, volume.Maximum);
+    var scaling = SettingPresentation.For(entries["enemy_health_scaling"]);
+    Equal(SettingKind.Slider, scaling.Kind);
+    True(scaling.Maximum >= 350);
+    Equal(SettingKind.Password, SettingPresentation.For(entries["cooppassword"]).Kind);
+    Equal(SettingKind.Text, SettingPresentation.For(entries["future_setting"]).Kind);
+    Equal(SettingKind.Text, SettingPresentation.For(entries["allow_invaders"] with { Value = "2" }).Kind);
+    Equal(SettingKind.Text, SettingPresentation.For(entries["overhead_player_display"] with { Value = "99" }).Kind);
+    Equal(SettingKind.Text, SettingPresentation.For(entries["default_boot_master_volume"] with { Value = "15" }).Kind);
 }
 static void Add(ZipArchive z, string name, string content) { using var w = new StreamWriter(z.CreateEntry(name).Open()); w.Write(content); }
 sealed class FakeHandler(Func<HttpRequestMessage, HttpResponseMessage> answer) : HttpMessageHandler

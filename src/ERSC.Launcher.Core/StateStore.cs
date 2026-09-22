@@ -15,7 +15,7 @@ public sealed class StateStore(string directory)
     public LauncherState Load()
     {
         try { return File.Exists(FilePath) ? JsonSerializer.Deserialize<LauncherState>(File.ReadAllText(FilePath)) ?? new() : new(); }
-        catch (JsonException) { return new(); }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException) { return new(); }
     }
     public void Save(LauncherState state)
     {
