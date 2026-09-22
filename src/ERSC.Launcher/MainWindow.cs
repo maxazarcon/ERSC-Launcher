@@ -242,8 +242,16 @@ public sealed class MainWindow : Window
                 {
                     ItemsSource = presentation.Options, DisplayMemberPath = nameof(SettingOption.Label), SelectedValuePath = nameof(SettingOption.Value),
                     SelectedValue = entry.Value, Width = 280, HorizontalAlignment = HorizontalAlignment.Left,
-                    Background = BackgroundBrush, Foreground = TextBrush, BorderBrush = MutedBrush, Padding = new Thickness(8, 5, 8, 5)
+                    Background = Brushes.White, Foreground = Brushes.Black, BorderBrush = MutedBrush, Padding = new Thickness(8, 5, 8, 5)
                 };
+                var itemStyle = new Style(typeof(ComboBoxItem));
+                itemStyle.Setters.Add(new Setter(Control.BackgroundProperty, Brushes.White));
+                itemStyle.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.Black));
+                var highlighted = new Trigger { Property = ComboBoxItem.IsHighlightedProperty, Value = true };
+                highlighted.Setters.Add(new Setter(Control.BackgroundProperty, GoldBrush));
+                highlighted.Setters.Add(new Setter(Control.ForegroundProperty, BackgroundBrush));
+                itemStyle.Triggers.Add(highlighted);
+                choice.ItemContainerStyle = itemStyle;
                 AutomationProperties.SetName(choice, presentation.Label);
                 return (choice, () => choice.SelectedValue?.ToString() ?? entry.Value);
             }

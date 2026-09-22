@@ -6,8 +6,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>ERSCLauncher</AssemblyName>
-    <Version>1.1.0</Version>
-    <FileVersion>1.1.0.0</FileVersion>
+    <Version>1.1.1</Version>
+    <FileVersion>1.1.1.0</FileVersion>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../ERSC.Launcher.Core/ERSC.Launcher.Core.csproj" />

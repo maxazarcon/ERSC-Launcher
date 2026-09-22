@@ -55,6 +55,20 @@ internal static class Program
         using var file = File.Create(args[0]); encoder.Save(file);
         Console.WriteLine(args[0]);
 
+        var combo = controls.OfType<System.Windows.Controls.ComboBox>().Single();
+        if (combo.Background is not System.Windows.Media.SolidColorBrush background || background.Color != Colors.White ||
+            combo.Foreground is not System.Windows.Media.SolidColorBrush foreground || foreground.Color != Colors.Black)
+            throw new Exception("Dropdown selected text lacks a high-contrast face.");
+        var scroll = controls.OfType<System.Windows.Controls.ScrollViewer>().First(s => s.Content is System.Windows.Controls.StackPanel);
+        scroll.ScrollToVerticalOffset(450);
+        content.UpdateLayout();
+        var choiceBitmap = new RenderTargetBitmap(860, 760, 96, 96, PixelFormats.Pbgra32);
+        choiceBitmap.Render(content);
+        var choiceEncoder = new PngBitmapEncoder(); choiceEncoder.Frames.Add(BitmapFrame.Create(choiceBitmap));
+        var choicePath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[0]))!, "dropdown.png");
+        using (var choiceFile = File.Create(choicePath)) choiceEncoder.Save(choiceFile);
+        Console.WriteLine(choicePath);
+
         controls.OfType<System.Windows.Controls.CheckBox>().First(c => AutomationProperties.GetName(c) == "Allow invasions").IsChecked = false;
         controls.OfType<System.Windows.Controls.ComboBox>().First().SelectedValue = "2";
         controls.OfType<System.Windows.Controls.Slider>().First(s => AutomationProperties.GetName(s) == "Volume before loading a save").Value = 4;
