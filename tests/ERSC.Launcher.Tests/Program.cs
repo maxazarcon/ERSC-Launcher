@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Net;
 using System.Net.Http;
+using System.Security.Cryptography;
 using ERSC.Launcher.Core;
 
 var tests = new (string Name, Action Run)[]
@@ -19,6 +20,10 @@ var tests = new (string Name, Action Run)[]
     ,("Current upstream ZIP extracts", TestRealArchive)
     ,("Live GitHub release downloads and validates", TestLiveRelease)
     ,("Known settings choose controls without changing raw values", TestSettingControls)
+    ,("Launcher updates select stable newer versions and a verified asset", TestLauncherRelease)
+    ,("Launcher downloads reject corrupt and incomplete executables", TestLauncherDownload)
+    ,("Launcher replacement preserves its path and restores on failure", TestLauncherReplacement)
+    ,("Failed launcher update reports the error on the next launch", TestLauncherError)
 };
 var failed = 0;
 foreach (var test in tests)
@@ -191,6 +196,54 @@ static void TestSettingControls()
     Equal(SettingKind.Text, SettingPresentation.For(entries["allow_invaders"] with { Value = "2" }).Kind);
     Equal(SettingKind.Text, SettingPresentation.For(entries["overhead_player_display"] with { Value = "99" }).Kind);
     Equal(SettingKind.Text, SettingPresentation.For(entries["default_boot_master_volume"] with { Value = "15" }).Kind);
+}
+static void TestLauncherRelease()
+{
+    const string repo = "friend/ERSC-Launcher";
+    var asset = new LauncherAsset("ERSCLauncher-1.2.0-win-x64.exe", "https://github.com/friend/ERSC-Launcher/releases/download/v1.2.0/ERSCLauncher-1.2.0-win-x64.exe", 3, "sha256:" + new string('A', 64));
+    var stable = new LauncherRelease("v1.2.0", false, false, [asset]);
+    var beta = new LauncherRelease("v9.0.0", true, false, [asset]);
+    Equal("v1.2.0", LauncherUpdates.SelectNewer([beta, stable], new Version(1, 1, 1))!.Tag);
+    True(LauncherUpdates.SelectNewer([stable], new Version(1, 2, 0)) is null);
+    Equal(asset, LauncherUpdates.SelectAsset(stable, repo));
+    Equal("v1.2.0", LauncherUpdates.SelectNewerUsable([new LauncherRelease("v1.3.0", false, false, []), stable], new Version(1, 1, 1), repo)!.Tag);
+    try { LauncherUpdates.SelectAsset(stable with { Assets = [asset with { Digest = null }] }, repo); throw new Exception("accepted missing digest"); } catch (InvalidDataException) { }
+    try { LauncherUpdates.SelectAsset(stable with { Assets = [asset with { Url = "https://evil.test/ERSCLauncher.exe" }] }, repo); throw new Exception("accepted foreign URL"); } catch (InvalidDataException) { }
+}
+static void TestLauncherDownload()
+{
+    var root = Temp(); var destination = Path.Combine(root, "candidate.exe");
+    var bytes = new byte[] { 1, 2, 3 }; var digest = "sha256:" + Convert.ToHexString(SHA256.HashData(bytes));
+    var asset = new LauncherAsset("candidate.exe", "https://github.com/friend/ERSC-Launcher/releases/download/v1.2.0/candidate.exe", 3, digest);
+    using var client = new HttpClient(new FakeHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(bytes) }));
+    LauncherUpdates.DownloadAsync(client, asset, destination).GetAwaiter().GetResult();
+    True(File.ReadAllBytes(destination).SequenceEqual(bytes));
+    try { LauncherUpdates.DownloadAsync(client, asset with { Size = 4 }, destination).GetAwaiter().GetResult(); throw new Exception("accepted short file"); } catch (InvalidDataException) { }
+    try { LauncherUpdates.DownloadAsync(client, asset with { Digest = "sha256:" + new string('0', 64) }, destination).GetAwaiter().GetResult(); throw new Exception("accepted wrong hash"); } catch (InvalidDataException) { }
+    True(File.ReadAllBytes(destination).SequenceEqual(bytes) && !File.Exists(destination + ".partial"));
+}
+static void TestLauncherReplacement()
+{
+    var root = Temp(); var app = Path.Combine(root, "My Launcher.exe"); var payload = Path.Combine(root, "new.exe"); var backup = Path.Combine(root, "old.exe");
+    File.WriteAllText(app, "old"); File.WriteAllText(payload, "new");
+    LauncherReplacement.Replace(app, payload, backup, _ => { });
+    Equal("new", File.ReadAllText(app)); Equal("old", File.ReadAllText(backup));
+    File.WriteAllText(payload, "next");
+    try { LauncherReplacement.Replace(app, payload, backup, _ => throw new IOException("launch failed")); throw new Exception("accepted failed launch"); } catch (IOException ex) when (ex.Message == "launch failed") { }
+    Equal("new", File.ReadAllText(app));
+    Equal("My Launcher.exe", Path.GetFileName(app));
+    using (var locked = new FileStream(app, FileMode.Open, FileAccess.Read, FileShare.None))
+    {
+        try { LauncherReplacement.Replace(app, payload, backup, _ => { }); throw new Exception("accepted locked target"); } catch (IOException) { }
+    }
+    Equal("new", File.ReadAllText(app));
+}
+static void TestLauncherError()
+{
+    var folder = Temp();
+    LauncherUpdateErrors.Write(folder, "Access denied");
+    Equal("Access denied", LauncherUpdateErrors.Take(folder));
+    True(LauncherUpdateErrors.Take(folder) is null);
 }
 static void Add(ZipArchive z, string name, string content) { using var w = new StreamWriter(z.CreateEntry(name).Open()); w.Write(content); }
 sealed class FakeHandler(Func<HttpRequestMessage, HttpResponseMessage> answer) : HttpMessageHandler

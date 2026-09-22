@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.0 — 2026-09-22
+
+- Check for stable launcher releases on startup and download a verified update in the background.
+- Restart to replace the portable EXE at its current path, with a backup of the prior version.
+- Publish versioned Windows builds from GitHub Actions when a matching version tag is pushed.
+
 ## 1.1.1 — 2026-09-22
 
 - Make dropdown text and menu options readable with explicit high-contrast colors.

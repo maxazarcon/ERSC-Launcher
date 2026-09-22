@@ -1,0 +1,48 @@
+name: Release launcher
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Validate tag and branch
+        shell: pwsh
+        run: |
+          [xml]$project = Get-Content src/ERSC.Launcher/ERSC.Launcher.csproj
+          $version = $project.Project.PropertyGroup.Version
+          if ($env:GITHUB_REF_NAME -cne "v$version") { throw "Tag must match project version $version" }
+          git merge-base --is-ancestor HEAD "origin/$env:DEFAULT_BRANCH"
+          if ($LASTEXITCODE -ne 0) { throw "Release commit must be on the default branch" }
+      - name: Test
+        shell: pwsh
+        run: |
+          dotnet restore tests/ERSC.Launcher.Tests/ERSC.Launcher.Tests.csproj --configfile NuGet.Config
+          dotnet run --no-restore --project tests/ERSC.Launcher.Tests/ERSC.Launcher.Tests.csproj -c Release
+      - name: Publish portable EXE
+        shell: pwsh
+        run: |
+          dotnet restore src/ERSC.Launcher/ERSC.Launcher.csproj -r win-x64 --configfile NuGet.Config
+          dotnet publish src/ERSC.Launcher/ERSC.Launcher.csproj --no-restore -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -o dist
+          $version = $env:GITHUB_REF_NAME.Substring(1)
+          Move-Item dist/ERSCLauncher.exe "dist/ERSCLauncher-$version-win-x64.exe"
+      - name: Create GitHub release
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.Substring(1)
+          gh release create "$env:GITHUB_REF_NAME" "dist/ERSCLauncher-$version-win-x64.exe" --verify-tag --generate-notes --title "$env:GITHUB_REF_NAME"

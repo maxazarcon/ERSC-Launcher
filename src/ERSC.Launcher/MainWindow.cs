@@ -13,6 +13,7 @@ namespace ERSC.Launcher;
 
 public sealed class MainWindow : Window
 {
+    private const string LauncherRepository = "maxazarcon/ERSC-Launcher";
     private static readonly Brush BackgroundBrush = Color("#141713");
     private static readonly Brush PanelBrush = Color("#20251F");
     private static readonly Brush TextBrush = Color("#EEEDE3");
@@ -24,6 +25,8 @@ public sealed class MainWindow : Window
     private readonly TextBlock _gameText = new() { TextWrapping = TextWrapping.Wrap };
     private readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap };
     private readonly TextBlock _version = new() { TextWrapping = TextWrapping.Wrap };
+    private readonly TextBlock _launcherUpdateStatus = new() { Text = "Checking for launcher updates…", TextWrapping = TextWrapping.Wrap };
+    private readonly Button _restartUpdate = new();
     private readonly StackPanel _settings = new() { Orientation = Orientation.Vertical };
     private readonly Button _install = new();
     private readonly Button _save = new();
@@ -38,6 +41,8 @@ public sealed class MainWindow : Window
     private IniDocument? _ini;
     private bool _busy;
     private bool _current;
+    private string? _launcherPayload;
+    private string? _launcherUpdateTag;
 
     public MainWindow()
     {
@@ -49,7 +54,7 @@ public sealed class MainWindow : Window
         FontFamily = new FontFamily("Segoe UI"); FontSize = 14;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Content = BuildScreen();
-        Loaded += async (_, _) => await InitializeAsync();
+        Loaded += (_, _) => { ShowPreviousUpdateErrors(); _ = InitializeAsync(); _ = CheckLauncherAsync(); };
         Closed += (_, _) => { _http.Dispose(); CleanupStage(); };
     }
 
@@ -68,6 +73,13 @@ public sealed class MainWindow : Window
         var body = new StackPanel(); scroll.Content = body;
         body.Children.Add(Label("SEAMLESS CO-OP", 13, GoldBrush, new Thickness(0, 0, 0, 4)));
         body.Children.Add(Label("Your way into the Lands Between", 26, TextBrush, new Thickness(0, 0, 0, 20)));
+
+        var launcherPanel = Panel(); var launcherCard = Wrap(launcherPanel); launcherCard.Margin = new Thickness(0, 0, 0, 14); body.Children.Add(launcherCard);
+        launcherPanel.Children.Add(Label("Launcher updates", 17, TextBrush, new Thickness(0, 0, 0, 6)));
+        _launcherUpdateStatus.Foreground = MutedBrush; launcherPanel.Children.Add(_launcherUpdateStatus);
+        _restartUpdate.Content = "Restart to update"; StyleButton(_restartUpdate); _restartUpdate.Margin = new Thickness(0, 12, 0, 0);
+        _restartUpdate.HorizontalAlignment = HorizontalAlignment.Left; _restartUpdate.Visibility = Visibility.Collapsed;
+        _restartUpdate.Click += (_, _) => RestartForLauncherUpdate(); launcherPanel.Children.Add(_restartUpdate);
 
         var location = Panel(); body.Children.Add(Wrap(location));
         location.Children.Add(Label("Elden Ring game folder", 17, TextBrush, new Thickness(0, 0, 0, 6)));
@@ -89,6 +101,79 @@ public sealed class MainWindow : Window
         body.Children.Add(_settings);
         UpdateButtons();
         return root;
+    }
+
+    private async Task CheckLauncherAsync()
+    {
+        var installed = typeof(App).Assembly.GetName().Version ?? new Version(1, 2, 0);
+        var current = new Version(installed.Major, installed.Minor, installed.Build);
+        _launcherUpdateStatus.Text = $"Launcher {current}: checking for updates…";
+        try
+        {
+            var release = await new GitHubLauncherReleases(_http, LauncherRepository).GetNewerAsync(current);
+            if (release is null) { _launcherUpdateStatus.Text = $"Launcher {current} is up to date."; return; }
+            var asset = LauncherUpdates.SelectAsset(release, LauncherRepository);
+            var folder = Path.Combine(_dataDir, "launcher-updates", release.Tag);
+            Directory.CreateDirectory(folder);
+            var payload = Path.Combine(folder, asset.Name);
+            _launcherUpdateStatus.Text = $"Downloading launcher {release.Tag}…";
+            await LauncherUpdates.DownloadAsync(_http, asset, payload);
+            _launcherPayload = payload; _launcherUpdateTag = release.Tag;
+            _launcherUpdateStatus.Text = $"Launcher {release.Tag} is ready. Restart to update.";
+            _restartUpdate.Visibility = Visibility.Visible;
+        }
+        catch (Exception ex)
+        {
+            _launcherUpdateStatus.Text = $"Launcher update check unavailable: {ex.Message}";
+        }
+    }
+
+    private void ShowPreviousUpdateErrors()
+    {
+        var updates = Path.Combine(_dataDir, "launcher-updates");
+        if (!Directory.Exists(updates)) return;
+        foreach (var folder in Directory.EnumerateDirectories(updates))
+        {
+            try
+            {
+                var message = LauncherUpdateErrors.Take(folder);
+                if (message is not null)
+                {
+                    _launcherUpdateStatus.Text = message;
+                    MessageBox.Show(this, message, "Launcher update failed", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+            }
+            catch { }
+        }
+    }
+
+    private void RestartForLauncherUpdate()
+    {
+        if (_launcherPayload is null || _launcherUpdateTag is null) return;
+        if (_ini is not null && _editors.Any(e => e.Read() != e.Entry.Value))
+        {
+            var choice = MessageBox.Show(this, "Save changed mod settings before restarting?", "Launcher update", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
+            if (choice == MessageBoxResult.Cancel || (choice == MessageBoxResult.Yes && !SaveSettings())) return;
+        }
+        try
+        {
+            var target = Environment.ProcessPath ?? throw new IOException("Could not locate the running launcher.");
+            var folder = Path.GetDirectoryName(_launcherPayload)!;
+            var probe = target + ".writecheck-" + Guid.NewGuid().ToString("N");
+            try { using var stream = File.Create(probe); } finally { if (File.Exists(probe)) File.Delete(probe); }
+            var helper = Path.Combine(folder, "updater.exe");
+            File.Copy(target, helper, true);
+            var info = new ProcessStartInfo(helper) { WorkingDirectory = folder, UseShellExecute = false };
+            foreach (var arg in new[] { "--apply-launcher-update", target, _launcherPayload, Path.Combine(folder, "previous.exe"), Environment.ProcessId.ToString(CultureInfo.InvariantCulture) })
+                info.ArgumentList.Add(arg);
+            Process.Start(info);
+            Application.Current.Shutdown();
+        }
+        catch (Exception ex)
+        {
+            _launcherUpdateStatus.Text = $"Could not start update: {ex.Message}";
+            MessageBox.Show(this, ex.Message, "Could not update launcher", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private async Task InitializeAsync()
