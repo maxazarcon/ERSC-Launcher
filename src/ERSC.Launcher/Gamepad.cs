@@ -3,7 +3,7 @@ using System.Windows.Threading;
 
 namespace ERSC.Launcher;
 
-public enum GamepadButton { Up, Down, Left, Right, A, B, X, Y, Start, Back, LeftShoulder, RightShoulder }
+public enum GamepadButton { Up, Down, Left, Right, A, B, X, Y, Start, Back, LeftShoulder, RightShoulder, RightTrigger }
 
 // Polls XInput controllers. Steam Input presents PlayStation, Switch and Deck controls as XInput devices
 // for non-Steam shortcuts, so this covers the controllers people use in Big Picture mode.
@@ -11,6 +11,7 @@ public sealed class Gamepad : IDisposable
 {
     private const short StickThreshold = 16000;
     private const short ScrollDeadzone = 8000;
+    private const byte TriggerThreshold = 128;
     private static readonly TimeSpan RepeatDelay = TimeSpan.FromMilliseconds(400);
     private static readonly TimeSpan RepeatInterval = TimeSpan.FromMilliseconds(90);
     private static readonly TimeSpan ProbeInterval = TimeSpan.FromSeconds(1);
@@ -53,6 +54,7 @@ public sealed class Gamepad : IDisposable
             if (pad.ThumbLY < -StickThreshold) down.Add(GamepadButton.Down);
             if (pad.ThumbLX < -StickThreshold) down.Add(GamepadButton.Left);
             if (pad.ThumbLX > StickThreshold) down.Add(GamepadButton.Right);
+            if (pad.RightTrigger > TriggerThreshold) down.Add(GamepadButton.RightTrigger);
             if (Math.Abs((int)pad.ThumbRY) > Math.Abs((int)scroll)) scroll = pad.ThumbRY;
             if (!Connected) break; // While probing, one controller is enough to switch to full-rate polling.
         }

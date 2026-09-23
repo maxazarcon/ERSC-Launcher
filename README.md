@@ -4,7 +4,7 @@ A Windows launcher for the standard Steam installation of Elden Ring. It locates
 
 ## Use
 
-1. Download `ERSCLauncher-1.4.0-setup-win-x64.exe` from [GitHub Releases](https://github.com/maxazarcon/ERSC-Launcher/releases) and run it on Windows 10 or 11. It installs for your Windows account only (no administrator prompt) into `%LOCALAPPDATA%\Programs\ERSC Launcher`, adds a Start Menu entry, and can add the launcher to Steam. Uninstall it from **Settings > Apps**. If you prefer no installation, download the portable `ERSCLauncher-1.4.0-win-x64.exe` instead.
+1. Download `ERSCLauncher-1.5.0-setup-win-x64.exe` from [GitHub Releases](https://github.com/maxazarcon/ERSC-Launcher/releases) and run it on Windows 10 or 11. It installs for your Windows account only (no administrator prompt) into `%LOCALAPPDATA%\Programs\ERSC Launcher`, adds a Start Menu entry, and can add the launcher to Steam. Uninstall it from **Settings > Apps**. If you prefer no installation, download the portable `ERSCLauncher-1.5.0-win-x64.exe` instead.
 2. Confirm the detected `ELDEN RING\Game` folder, or choose one containing `eldenring.exe`.
 3. Install the mod when prompted. Existing installations show an update button when a newer release is available; updates require confirmation.
 4. Enter a co-op password, save settings, then select **Launch Seamless Co-Op**. Steam must be running and online. Everyone in the session needs the same game version, mod version, and password.
@@ -29,9 +29,10 @@ Any controller Steam supports works in Big Picture mode. Outside Steam, Xbox-com
 | --- | --- |
 | D-pad or left stick up/down | Move between settings and buttons |
 | D-pad or left stick left/right | Change a slider or dropdown; otherwise move |
-| LB / RB | Change a slider in larger steps |
+| LB / RB | Change a slider in larger steps (RB elsewhere jumps to Launch) |
+| RT | Jump to the Launch button |
 | A | Press a button, flip a switch, open a dropdown, or edit a text field with the on-screen keyboard |
-| B | Close a dropdown, dialog or the keyboard without changes |
+| B | Close a dropdown, dialog or the keyboard without changes; on the main screen, quit |
 | X | Save settings |
 | Y | Check for mod updates |
 | Menu (☰) | Launch Seamless Co-Op |
@@ -53,12 +54,12 @@ dotnet run --project tests/ERSC.Launcher.Tests/ERSC.Launcher.Tests.csproj
 dotnet publish src/ERSC.Launcher/ERSC.Launcher.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:DebugType=None -o dist
 ```
 
-The output is `dist\ERSCLauncher.exe`; the release copy is named `ERSCLauncher-1.4.0-win-x64.exe`. It contains the .NET runtime and needs no separate runtime installation. The launcher downloads the mod directly from the release asset; the mod files are not bundled into the EXE.
+The output is `dist\ERSCLauncher.exe`; the release copy is named `ERSCLauncher-1.5.0-win-x64.exe`. It contains the .NET runtime and needs no separate runtime installation. The launcher downloads the mod directly from the release asset; the mod files are not bundled into the EXE.
 
 To build both the portable EXE and the installer (uses [Inno Setup 6](https://jrsoftware.org/isinfo.php), installed through Chocolatey if missing):
 
 ```powershell
-./installer/build.ps1 -Version 1.4.0
+./installer/build.ps1 -Version 1.5.0
 ```
 
 ## Publish a launcher release

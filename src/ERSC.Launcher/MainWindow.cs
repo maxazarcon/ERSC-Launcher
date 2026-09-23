@@ -132,17 +132,16 @@ public sealed class MainWindow : Window
         _launch.Content = "Launch Seamless Co-Op"; _launch.Click += (_, _) => Launch();
         StyleButton(_quit); StyleButton(_save); StyleButton(_launch, primary: true);
         _quit.Margin = new Thickness(12, 0, 0, 0); _save.Margin = new Thickness(8, 0, 0, 0); _launch.Margin = new Thickness(8, 0, 0, 0);
-        _quit.Visibility = _gamepadMode ? Visibility.Visible : Visibility.Collapsed; // Full screen has no title bar to close from.
         actions.Children.Add(_quit); actions.Children.Add(_save); actions.Children.Add(_launch);
         _launcherUpdateStatus.Foreground = MutedBrush; _launcherUpdateStatus.FontSize = 12; _launcherUpdateStatus.VerticalAlignment = VerticalAlignment.Center;
         _launcherUpdateStatus.TextWrapping = TextWrapping.NoWrap; _launcherUpdateStatus.TextTrimming = TextTrimming.CharacterEllipsis;
         _launcherUpdateStatus.SetBinding(ToolTipProperty, new Binding(nameof(TextBlock.Text)) { RelativeSource = RelativeSource.Self });
         footer.Children.Add(_launcherUpdateStatus);
-        foreach (var (glyph, action) in new[] { ("A", "Select"), ("B", "Back"), ("X", "Save"), ("Y", "Check updates"), ("☰", "Launch"), ("⧉", "Quit") })
+        foreach (var (glyph, action) in new[] { ("A", "Select"), ("B", "Back / Quit"), ("X", "Save"), ("Y", "Check updates"), ("RT", "Go to Launch"), ("☰", "Launch"), ("⧉", "Quit") })
         {
             _hints.Children.Add(new Border
             {
-                Width = 22, Height = 22, CornerRadius = new CornerRadius(11), BorderBrush = GoldBrush, BorderThickness = new Thickness(1.5), Margin = new Thickness(0, 0, 6, 0),
+                MinWidth = 22, Height = 22, Padding = new Thickness(4, 0, 4, 0), CornerRadius = new CornerRadius(11), BorderBrush = GoldBrush, BorderThickness = new Thickness(1.5), Margin = new Thickness(0, 0, 6, 0),
                 Child = new TextBlock { Text = glyph, FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = GoldBrush, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }
             });
             _hints.Children.Add(new TextBlock { Text = action, FontSize = 12, Foreground = MutedBrush, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 18, 0) });
@@ -521,7 +520,13 @@ public sealed class MainWindow : Window
         _steam.IsEnabled = !added;
     }
 
-    private void UpdateHints() => _hints.Visibility = _gamepadMode || _gamepad?.Connected == true ? Visibility.Visible : Visibility.Collapsed;
+    private void UpdateHints()
+    {
+        // Full screen has no title bar to close from, and a controller can't reach one.
+        var controller = _gamepadMode || _gamepad?.Connected == true;
+        _hints.Visibility = controller ? Visibility.Visible : Visibility.Collapsed;
+        _quit.Visibility = controller ? Visibility.Visible : Visibility.Collapsed;
+    }
 
     private Task<int> AskAsync(string title, string message, string[] buttons)
     {
@@ -590,7 +595,9 @@ public sealed class MainWindow : Window
                 if (!GamepadNavigator.Adjust(focused, direction, large: false)) GamepadNavigator.Move(direction > 0);
                 break;
             case GamepadButton.LeftShoulder: GamepadNavigator.Adjust(focused, -1, large: true); break;
-            case GamepadButton.RightShoulder: GamepadNavigator.Adjust(focused, 1, large: true); break;
+            case GamepadButton.RightShoulder: if (!GamepadNavigator.Adjust(focused, 1, large: true)) SnapToLaunch(); break;
+            case GamepadButton.RightTrigger: SnapToLaunch(); break;
+            case GamepadButton.B: _ = ConfirmQuitAsync(); break;
             case GamepadButton.A:
                 if (focused is TextBox or PasswordBox) _ = EditTextAsync((Control)focused);
                 else
@@ -609,6 +616,13 @@ public sealed class MainWindow : Window
     private async Task ConfirmQuitAsync()
     {
         if (await AskAsync("Quit", "Close the launcher?", ["Quit", "Cancel"]) == 0) Close();
+    }
+
+    /// <summary>Jumps to the Launch button, or to whatever still blocks launching.</summary>
+    private void SnapToLaunch()
+    {
+        if (_launch.IsEnabled) _launch.Focus();
+        else FocusPreferred();
     }
 
     /// <summary>Puts focus on the next thing to do: enter a password, install, or launch.</summary>

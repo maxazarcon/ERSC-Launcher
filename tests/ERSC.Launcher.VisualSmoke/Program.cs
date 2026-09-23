@@ -158,6 +158,20 @@ internal static class Program
 
             window.HandleGamepad(GamepadButton.X); Pump();
             Check(File.ReadAllText(Path.Combine(game, "SeamlessCoop", "ersc_settings.ini")).Contains("cooppassword = qwWs"), "X saves settings");
+
+            var launch = controls.OfType<Button>().First(b => b.Content as string == "Launch Seamless Co-Op");
+            Check(launch.IsEnabled, "Launch is available with a password set");
+            invade.Focus(); Pump();
+            window.HandleGamepad(GamepadButton.RightTrigger); Pump();
+            Check(launch.IsKeyboardFocused, "RT jumps to the Launch button");
+            invade.Focus(); Pump();
+            window.HandleGamepad(GamepadButton.RightShoulder); Pump();
+            Check(launch.IsKeyboardFocused, "RB jumps to the Launch button when not on a slider");
+
+            window.HandleGamepad(GamepadButton.B); Pump();
+            Check(Descendants(layers).OfType<OverlayDialog>().Any(), "B on the main screen asks to quit");
+            window.HandleGamepad(GamepadButton.B); Pump();
+            Check(!Descendants(layers).OfType<OverlayDialog>().Any() && launch.IsKeyboardFocused, "B again cancels quitting and restores focus");
             Console.WriteLine("PASS Controller navigates, edits, types and saves settings");
         }
         finally { host.Content = null; host.Close(); }
