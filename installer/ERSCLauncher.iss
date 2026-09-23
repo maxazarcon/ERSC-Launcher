@@ -1,5 +1,5 @@
 ; Per-user installer for the Seamless Co-Op Launcher. Build with:
-;   iscc /DAppVersion=1.5.0 /DSourceExe=..\dist\ERSCLauncher.exe /O..\dist installer\ERSCLauncher.iss
+;   iscc /DAppVersion=1.6.0 /DSourceExe=..\dist\ERSCLauncher.exe /O..\dist installer\ERSCLauncher.iss
 
 #ifndef AppVersion
   #error Pass /DAppVersion=X.Y.Z

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.0 — 2026-09-23
+
+- Give the Steam shortcut its own library artwork: a portrait cover, wide cover, banner and logo. Art you set yourself in Steam is kept, and removing the shortcut only deletes the launcher's own images.
+
 ## 1.5.0 — 2026-09-23
 
 - Press B on the main screen to quit (with a confirmation). View still quits too.

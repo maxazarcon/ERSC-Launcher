@@ -122,7 +122,8 @@ public static class BinaryVdf
     }
 }
 
-// Adds the launcher to Steam as a non-Steam game by editing userdata/<user>/config/shortcuts.vdf.
+// Adds the launcher to Steam as a non-Steam game by editing userdata/<user>/config/shortcuts.vdf,
+// and gives it library artwork in userdata/<user>/config/grid.
 // Steam rewrites that file when it exits, so callers must make sure Steam is closed first.
 public static class SteamShortcuts
 {
@@ -173,6 +174,7 @@ public static class SteamShortcuts
             }
             Fill(entry, exe);
             Save(file, root);
+            AddArtwork(file, exe);
             count++;
         }
         return count;
@@ -190,9 +192,58 @@ public static class SteamShortcuts
             if (shortcuts.Children.RemoveAll(s => Matches(s, exe)) == 0) continue;
             for (var i = 0; i < shortcuts.Children.Count; i++) shortcuts.Children[i].Name = i.ToString(System.Globalization.CultureInfo.InvariantCulture);
             Save(file, root);
+            RemoveArtwork(file, exe);
             count++;
         }
         return count;
+    }
+
+    // Library artwork, by the suffix Steam expects after the app ID in userdata/<user>/config/grid.
+    private static readonly (string Suffix, string Resource)[] Artwork =
+        [("p", "portrait.png"), ("", "wide.png"), ("_hero", "hero.png"), ("_logo", "logo.png")];
+    private static readonly string[] ArtworkExtensions = [".png", ".jpg", ".jpeg"];
+
+    public static string ArtworkPath(string shortcutFile, string exe, string suffix) =>
+        Path.Combine(Path.GetDirectoryName(shortcutFile)!, "grid", $"{AppId(Quote(Path.GetFullPath(exe)), AppName)}{suffix}.png");
+
+    // Artwork is cosmetic, so a failure here never undoes the shortcut itself.
+    private static void AddArtwork(string shortcutFile, string exe)
+    {
+        foreach (var (suffix, resource) in Artwork)
+        {
+            try
+            {
+                var target = ArtworkPath(shortcutFile, exe, suffix);
+                // Leave art the player picked in Steam, which it may have saved as a JPEG.
+                if (ArtworkExtensions.Any(ext => File.Exists(Path.ChangeExtension(target, ext)))) continue;
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.WriteAllBytes(target, ArtworkBytes(resource));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+    }
+
+    // Deletes only the launcher's own images, so custom art survives a remove and re-add.
+    private static void RemoveArtwork(string shortcutFile, string exe)
+    {
+        foreach (var (suffix, resource) in Artwork)
+        {
+            try
+            {
+                var target = ArtworkPath(shortcutFile, exe, suffix);
+                if (File.Exists(target) && File.ReadAllBytes(target).AsSpan().SequenceEqual(ArtworkBytes(resource))) File.Delete(target);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+    }
+
+    public static byte[] ArtworkBytes(string resource)
+    {
+        using var stream = typeof(SteamShortcuts).Assembly.GetManifestResourceStream("SteamArt." + resource)
+            ?? throw new InvalidOperationException($"Missing embedded Steam artwork {resource}.");
+        using var copy = new MemoryStream();
+        stream.CopyTo(copy);
+        return copy.ToArray();
     }
 
     private static void Fill(VdfNode entry, string exe)
