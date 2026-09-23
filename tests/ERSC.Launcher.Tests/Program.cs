@@ -25,6 +25,10 @@ var tests = new (string Name, Action Run)[]
     ,("Launcher replacement preserves its path and restores on failure", TestLauncherReplacement)
     ,("Failed launcher update reports the error on the next launch", TestLauncherError)
     ,("Published launcher updates an older portable file", TestLiveLauncherUpdate)
+    ,("Steam shortcut file round-trips every value type", TestVdfRoundTrip)
+    ,("Steam shortcut ID matches Steam's non-Steam game scheme", TestSteamAppId)
+    ,("Adding to Steam keeps other shortcuts, backs up, and does not duplicate", TestSteamAdd)
+    ,("Removing from Steam deletes only the launcher entry", TestSteamRemove)
 };
 var failed = 0;
 foreach (var test in tests)
@@ -39,6 +43,7 @@ static void Equal<T>(T expected, T actual)
     if (!EqualityComparer<T>.Default.Equals(expected, actual)) throw new Exception($"Expected {expected}; got {actual}");
 }
 static void True(bool value) { if (!value) throw new Exception("Expected true"); }
+static void False(bool value) { if (value) throw new Exception("Expected false"); }
 static string Temp() { var p = Path.Combine(Path.GetTempPath(), "ersc-test-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(p); return p; }
 static void TestIni()
 {
@@ -265,6 +270,105 @@ static void TestLiveLauncherUpdate()
     Equal(asset.Digest![7..].ToUpperInvariant(), Convert.ToHexString(SHA256.HashData(updated)));
 }
 static void Add(ZipArchive z, string name, string content) { using var w = new StreamWriter(z.CreateEntry(name).Open()); w.Write(content); }
+
+static byte[] SteamFixture()
+{
+    // An existing shortcut from another tool, including value types this launcher never writes.
+    using var stream = new MemoryStream();
+    void Text(string value) { stream.Write(System.Text.Encoding.UTF8.GetBytes(value)); stream.WriteByte(0); }
+    stream.WriteByte(0); Text("shortcuts");
+    stream.WriteByte(0); Text("0");
+    stream.WriteByte(2); Text("appid"); stream.Write(BitConverter.GetBytes(-123456));
+    stream.WriteByte(1); Text("AppName"); Text("Other Game ☆");
+    stream.WriteByte(1); Text("Exe"); Text("\"C:\\Games\\other.exe\"");
+    stream.WriteByte(1); Text("LaunchOptions"); Text("-windowed");
+    stream.WriteByte(7); Text("Future64"); stream.Write(BitConverter.GetBytes(0x0102030405060708L));
+    stream.WriteByte(3); Text("FutureFloat"); stream.Write(BitConverter.GetBytes(1.5f));
+    stream.WriteByte(0); Text("tags"); stream.WriteByte(1); Text("0"); Text("favorite"); stream.WriteByte(8);
+    stream.WriteByte(8);
+    stream.WriteByte(8);
+    stream.WriteByte(8);
+    return stream.ToArray();
+}
+static string SteamRoot()
+{
+    var root = Temp();
+    Directory.CreateDirectory(Path.Combine(root, "userdata", "12345", "config"));
+    Directory.CreateDirectory(Path.Combine(root, "userdata", "0")); // Not a real account.
+    Directory.CreateDirectory(Path.Combine(root, "userdata", "anonymous"));
+    File.WriteAllBytes(Path.Combine(root, "userdata", "12345", "config", "shortcuts.vdf"), SteamFixture());
+    return root;
+}
+static VdfNode Shortcuts(string root) => BinaryVdf.Read(File.ReadAllBytes(Path.Combine(root, "userdata", "12345", "config", "shortcuts.vdf"))).Find("shortcuts")!;
+static void TestVdfRoundTrip()
+{
+    var data = SteamFixture();
+    var root = BinaryVdf.Read(data);
+    True(data.SequenceEqual(BinaryVdf.Write(root)));
+    var other = root.Find("shortcuts")!.Find("0")!;
+    Equal("Other Game ☆", other.GetString("AppName"));
+    Equal(-123456, (int)other.Find("appid")!.Value);
+    Equal(VdfNode.UInt64, other.Find("Future64")!.Type);
+    try { BinaryVdf.Read(data[..^6]); throw new Exception("Truncated file was accepted"); }
+    catch (InvalidDataException) { }
+}
+static void TestSteamAppId()
+{
+    Equal(0xA327DE50u, SteamShortcuts.AppId("\"C:\\Games\\ERSCLauncher.exe\"", "Seamless Co-Op Launcher"));
+    True((SteamShortcuts.AppId("\"x\"", "y") & 0x80000000u) != 0);
+}
+static void TestSteamAdd()
+{
+    var root = SteamRoot();
+    var exe = Path.Combine(root, "Launcher Folder", "ERSCLauncher.exe");
+    Equal(1, SteamShortcuts.ShortcutFiles(root).Count);
+    False(SteamShortcuts.Contains(root, exe));
+    Equal(1, SteamShortcuts.Add(root, exe));
+    True(SteamShortcuts.Contains(root, exe));
+    True(File.ReadAllBytes(Path.Combine(root, "userdata", "12345", "config", "shortcuts.vdf.ersc-backup")).SequenceEqual(SteamFixture()));
+    var shortcuts = Shortcuts(root);
+    Equal(2, shortcuts.Children.Count);
+    Equal("-windowed", shortcuts.Find("0")!.GetString("LaunchOptions"));
+    Equal(VdfNode.UInt64, shortcuts.Find("0")!.Find("Future64")!.Type);
+    var added = shortcuts.Find("1")!;
+    Equal(SteamShortcuts.AppName, added.GetString("AppName"));
+    Equal("\"" + exe + "\"", added.GetString("Exe"));
+    Equal("\"" + Path.GetDirectoryName(exe) + "\"", added.GetString("StartDir"));
+    Equal(unchecked((int)SteamShortcuts.AppId("\"" + exe + "\"", SteamShortcuts.AppName)), (int)added.Find("appid")!.Value);
+    Equal("Elden Ring", added.Find("tags")!.GetString("0"));
+
+    added.Set("LaunchOptions", "--gamepad"); // A player's own edit in Steam must survive a second add.
+    File.WriteAllBytes(Path.Combine(root, "userdata", "12345", "config", "shortcuts.vdf"), BinaryVdf.Write(WrapShortcuts(shortcuts)));
+    Equal(1, SteamShortcuts.Add(root, exe));
+    shortcuts = Shortcuts(root);
+    Equal(2, shortcuts.Children.Count);
+    Equal("--gamepad", shortcuts.Find("1")!.GetString("LaunchOptions"));
+    Equal(1, shortcuts.Find("1")!.Find("tags")!.Children.Count);
+
+    var fresh = Temp();
+    Directory.CreateDirectory(Path.Combine(fresh, "userdata", "777"));
+    Equal(1, SteamShortcuts.Add(fresh, exe)); // No shortcuts.vdf yet.
+    True(SteamShortcuts.Contains(fresh, exe));
+    Equal(0, SteamShortcuts.Add(Temp(), exe)); // No Steam users.
+}
+static VdfNode WrapShortcuts(VdfNode shortcuts) { var root = VdfNode.NewMap(""); root.Children.Add(shortcuts); return root; }
+static void TestSteamRemove()
+{
+    var root = SteamRoot();
+    var exe = Path.Combine(root, "ERSCLauncher.exe");
+    Equal(0, SteamShortcuts.Remove(root, exe));
+    SteamShortcuts.Add(root, exe);
+    var shortcuts = Shortcuts(root);
+    // Put the launcher first so removal has to renumber the remaining entry.
+    shortcuts.Children.Reverse();
+    File.WriteAllBytes(Path.Combine(root, "userdata", "12345", "config", "shortcuts.vdf"), BinaryVdf.Write(WrapShortcuts(shortcuts)));
+    Equal(1, SteamShortcuts.Remove(root, exe));
+    False(SteamShortcuts.Contains(root, exe));
+    shortcuts = Shortcuts(root);
+    Equal(1, shortcuts.Children.Count);
+    Equal("0", shortcuts.Children[0].Name);
+    Equal("Other Game ☆", shortcuts.Children[0].GetString("AppName"));
+}
 sealed class FakeHandler(Func<HttpRequestMessage, HttpResponseMessage> answer) : HttpMessageHandler
 {
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => Task.FromResult(answer(request));
