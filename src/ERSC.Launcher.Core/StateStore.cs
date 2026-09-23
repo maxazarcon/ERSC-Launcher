@@ -11,6 +11,8 @@ public sealed record InstalledRecord(string Tag, Dictionary<string, string> File
 
 public sealed class StateStore(string directory)
 {
+    /// <summary>Recorded for a ZIP that matched no published release.</summary>
+    public const string UnverifiedTag = "unverified";
     private string FilePath => Path.Combine(directory, "state.json");
     public LauncherState Load()
     {

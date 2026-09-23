@@ -24,6 +24,12 @@ public static class SteamIntegration
         catch { return false; }
     }
 
+    public static bool HasLegacyName()
+    {
+        try { return Roots().Any(root => SteamShortcuts.HasLegacyName(root, Exe)); }
+        catch { return false; }
+    }
+
     /// <summary>Adds or removes the Steam shortcut, closing and reopening Steam when needed. Returns a message for the user.</summary>
     public static async Task<string> ChangeAsync(bool add, Func<string, Task<bool>> confirm)
     {

@@ -14,11 +14,11 @@ var tests = new (string Name, Action Run)[]
     ("Update preserves settings and can roll back", TestInstall),
     ("Manual binary comparison recognizes current install", TestFingerprint)
     ,("Merging settings retains new defaults and old unknown keys in their sections", TestMerge)
-    ,("Interrupted and corrupt downloads leave no ZIP", TestDownloads)
+    ,("Downloaded ZIP is identified by digest and found in Downloads", TestImport)
     ,("Offline release checks fail without affecting installed files", TestOffline)
     ,("Locked launcher leaves prior installation intact", TestLockedLauncher)
     ,("Current upstream ZIP extracts", TestRealArchive)
-    ,("Live GitHub release downloads and validates", TestLiveRelease)
+    ,("Live GitHub release ZIP is identified and installs", TestLiveRelease)
     ,("Known settings choose controls without changing raw values", TestSettingControls)
     ,("Launcher updates select stable newer versions and a verified asset", TestLauncherRelease)
     ,("Launcher downloads reject corrupt and incomplete executables", TestLauncherDownload)
@@ -30,6 +30,7 @@ var tests = new (string Name, Action Run)[]
     ,("Adding to Steam keeps other shortcuts, backs up, and does not duplicate", TestSteamAdd)
     ,("Removing from Steam deletes only the launcher entry", TestSteamRemove)
     ,("Adding to Steam installs library artwork and keeps custom art", TestSteamArtwork)
+    ,("Adding to Steam renames an older shortcut and carries its art", TestSteamRename)
 };
 var failed = 0;
 foreach (var test in tests)
@@ -129,15 +130,33 @@ static void TestMerge()
     True(text.Contains("new_setting = 3"));
     True(text.Contains("cooppassword = secret"));
 }
-static void TestDownloads()
+static void TestImport()
 {
-    var root = Temp(); var dest = Path.Combine(root, "release.zip");
-    var client = new HttpClient(new FakeHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent([1, 2]) }));
-    var asset = new ModAsset("mod.zip", "https://github.com/yuiamoroll/EldenRingSeamlessCoopRelease/releases/download/v1/mod.zip", 5, null);
-    try { ModPackage.DownloadAsync(client, asset, dest).GetAwaiter().GetResult(); throw new Exception("accepted short download"); } catch (InvalidDataException) { }
-    True(!File.Exists(dest) && !File.Exists(dest + ".partial"));
-    try { ModPackage.DownloadAsync(client, asset with { Size = 2, Digest = "sha256:0000" }, dest).GetAwaiter().GetResult(); throw new Exception("accepted bad digest"); } catch (InvalidDataException) { }
-    True(!File.Exists(dest));
+    const string baseUrl = "https://github.com/yuiamoroll/EldenRingSeamlessCoopRelease/releases/download/";
+    var root = Temp(); var zip = Path.Combine(root, "Seamless.Co-op.zip");
+    using (var z = ZipFile.Open(zip, ZipArchiveMode.Create)) { Add(z, "ersc_launcher.exe", "launcher"); Add(z, "SeamlessCoop/ersc.dll", "dll"); Add(z, "SeamlessCoop/ersc_settings.ini", "cooppassword = \n"); }
+    var bytes = File.ReadAllBytes(zip);
+    var digest = "sha256:" + Convert.ToHexString(SHA256.HashData(bytes));
+    ModRelease Release(string tag, long size, string? hash) => new(tag, false, false, DateTimeOffset.Parse("2026-09-01"), [new ModAsset("Seamless.Co-op.zip", baseUrl + tag + "/Seamless.Co-op.zip", size, hash)]);
+    var match = Release("v2.0.1", bytes.Length, digest);
+    Equal("v2.0.1", ModPackage.Identify(zip, [Release("v2.0.0", bytes.Length, "sha256:" + new string('0', 64)), match])!.Tag);
+    Equal(null, ModPackage.Identify(zip, [Release("v2.0.0", bytes.Length, "sha256:" + new string('0', 64))]));
+    Equal(null, ModPackage.Identify(zip, [Release("v2.0.1", bytes.Length, null)])); // No published digest: can't verify.
+    Equal(null, ModPackage.Identify(zip, [Release("v2.0.1", bytes.Length + 1, digest)]));
+    Equal(null, ModPackage.Identify(zip, []));
+    var empty = Path.Combine(root, "empty.zip"); File.WriteAllBytes(empty, []);
+    try { ModPackage.Identify(empty, [match]); throw new Exception("accepted empty ZIP"); } catch (InvalidDataException) { }
+
+    var downloads = Path.Combine(root, "Downloads"); Directory.CreateDirectory(downloads);
+    Equal(null, ModPackage.FindDownloaded(downloads, match.Assets[0]));
+    File.WriteAllBytes(Path.Combine(downloads, "other.zip"), bytes.Reverse().ToArray()); // Same size, different content.
+    Equal(null, ModPackage.FindDownloaded(downloads, match.Assets[0]));
+    File.Copy(zip, Path.Combine(downloads, "Seamless.Co-op (1).zip"));
+    Equal(Path.Combine(downloads, "Seamless.Co-op (1).zip"), ModPackage.FindDownloaded(downloads, match.Assets[0]));
+    Equal(null, ModPackage.FindDownloaded(downloads, match.Assets[0] with { Digest = null }));
+    Equal(null, ModPackage.FindDownloaded(Path.Combine(root, "missing"), match.Assets[0]));
+    Equal("https://github.com/yuiamoroll/EldenRingSeamlessCoopRelease/releases/tag/v2.0.1", ReleaseCatalog.ReleasePageUrl("v2.0.1"));
+    Equal("https://github.com/yuiamoroll/EldenRingSeamlessCoopRelease/releases/latest", ReleaseCatalog.ReleasePageUrl(null));
 }
 static void TestOffline()
 {
@@ -171,8 +190,10 @@ static void TestLiveRelease()
     using var client = new HttpClient();
     var release = new GitHubReleases(client).GetNewestAsync().GetAwaiter().GetResult();
     var asset = ReleaseCatalog.SelectZip(release);
-    var root = Temp(); var zip = Path.Combine(root, "release.zip");
-    ModPackage.DownloadAsync(client, asset, zip).GetAwaiter().GetResult();
+    // Stands in for the player's own browser download from the author's release page.
+    var root = Temp(); var zip = Path.Combine(root, asset.Name);
+    File.WriteAllBytes(zip, client.GetByteArrayAsync(asset.Url).GetAwaiter().GetResult());
+    Equal(release.Tag, ModPackage.Identify(zip, [release])!.Tag);
     var stage = Path.Combine(root, "stage"); ModPackage.Extract(zip, stage);
     True(ModFingerprint.IsInstalled(stage));
     var game = Path.Combine(root, "Game"); Directory.CreateDirectory(game);
@@ -396,6 +417,47 @@ static void TestSteamArtwork()
     False(File.Exists(Path.Combine(grid, $"{appId}_logo.png")));
     True(File.Exists(Path.Combine(grid, $"{appId}p.jpg")));
     True(File.Exists(Path.Combine(grid, $"{appId}_hero.png")));
+}
+static void TestSteamRename()
+{
+    var root = SteamRoot();
+    var exe = Path.Combine(root, "ERSCLauncher.exe");
+    var vdf = Path.Combine(root, "userdata", "12345", "config", "shortcuts.vdf");
+    var grid = Path.Combine(root, "userdata", "12345", "config", "grid");
+    const string oldName = "Seamless Co-Op Launcher";
+    var oldId = SteamShortcuts.AppId("\"" + exe + "\"", oldName);
+    var newId = SteamShortcuts.AppId("\"" + exe + "\"", SteamShortcuts.AppName);
+
+    // A shortcut made by 1.6.0: the old name, its own art, and a cover the player picked.
+    SteamShortcuts.Add(root, exe);
+    var shortcuts = Shortcuts(root);
+    var entry = shortcuts.Find("1")!;
+    entry.Set("AppName", oldName); entry.Set("appid", unchecked((int)oldId)); entry.Set("LaunchOptions", "--gamepad");
+    File.WriteAllBytes(vdf, BinaryVdf.Write(WrapShortcuts(shortcuts)));
+    foreach (var file in Directory.GetFiles(grid)) File.Delete(file);
+    File.WriteAllBytes(Path.Combine(grid, $"{oldId}_logo.png"), SteamShortcuts.ArtworkBytes("logo.png"));
+    File.WriteAllText(Path.Combine(grid, $"{oldId}p.jpg"), "player's cover");
+    True(SteamShortcuts.HasLegacyName(root, exe));
+
+    Equal(1, SteamShortcuts.Add(root, exe));
+    False(SteamShortcuts.HasLegacyName(root, exe));
+    shortcuts = Shortcuts(root);
+    Equal(2, shortcuts.Children.Count);
+    Equal(SteamShortcuts.AppName, shortcuts.Find("1")!.GetString("AppName"));
+    Equal(unchecked((int)newId), (int)shortcuts.Find("1")!.Find("appid")!.Value);
+    Equal("--gamepad", shortcuts.Find("1")!.GetString("LaunchOptions"));
+    False(File.Exists(Path.Combine(grid, $"{oldId}_logo.png")));
+    False(File.Exists(Path.Combine(grid, $"{oldId}p.jpg")));
+    Equal("player's cover", File.ReadAllText(Path.Combine(grid, $"{newId}p.jpg")));
+    False(File.Exists(Path.Combine(grid, $"{newId}p.png")));
+    True(File.ReadAllBytes(Path.Combine(grid, $"{newId}_logo.png")).SequenceEqual(SteamShortcuts.ArtworkBytes("logo.png")));
+
+    // Removing also clears launcher art left under the old ID.
+    File.WriteAllBytes(Path.Combine(grid, $"{oldId}_hero.png"), SteamShortcuts.ArtworkBytes("hero.png"));
+    SteamShortcuts.Remove(root, exe);
+    False(File.Exists(Path.Combine(grid, $"{oldId}_hero.png")));
+    False(File.Exists(Path.Combine(grid, $"{newId}_logo.png")));
+    True(File.Exists(Path.Combine(grid, $"{newId}p.jpg")));
 }
 sealed class FakeHandler(Func<HttpRequestMessage, HttpResponseMessage> answer) : HttpMessageHandler
 {

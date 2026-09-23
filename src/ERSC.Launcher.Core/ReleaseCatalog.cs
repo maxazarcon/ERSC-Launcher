@@ -8,6 +8,14 @@ public sealed record ModRelease(string Tag, bool Prerelease, bool Draft, DateTim
 
 public static class ReleaseCatalog
 {
+    public const string Repository = "yuiamoroll/EldenRingSeamlessCoopRelease";
+    public const string NexusUrl = "https://www.nexusmods.com/eldenring/mods/510";
+
+    /// <summary>The GitHub page a player downloads the release ZIP from.</summary>
+    public static string ReleasePageUrl(string? tag) => string.IsNullOrWhiteSpace(tag)
+        ? $"https://github.com/{Repository}/releases/latest"
+        : $"https://github.com/{Repository}/releases/tag/{Uri.EscapeDataString(tag)}";
+
     public static ModRelease SelectNewest(IEnumerable<ModRelease> releases) => releases
         .Where(r => !r.Draft && !string.IsNullOrWhiteSpace(r.Tag))
         .OrderByDescending(r => r.PublishedAt)
@@ -24,8 +32,13 @@ public static class ReleaseCatalog
 
 public sealed class GitHubReleases(HttpClient client)
 {
-    private const string Url = "https://api.github.com/repos/yuiamoroll/EldenRingSeamlessCoopRelease/releases?per_page=20";
-    public async Task<ModRelease> GetNewestAsync(CancellationToken cancellationToken = default)
+    private const string Url = "https://api.github.com/repos/" + ReleaseCatalog.Repository + "/releases?per_page=20";
+
+    // Only release metadata is read here. The ZIP itself comes from the player's own download.
+    public async Task<ModRelease> GetNewestAsync(CancellationToken cancellationToken = default) =>
+        ReleaseCatalog.SelectNewest(await GetRecentAsync(cancellationToken));
+
+    public async Task<IReadOnlyList<ModRelease>> GetRecentAsync(CancellationToken cancellationToken = default)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, Url);
         request.Headers.UserAgent.ParseAdd("ERSC-Launcher/1.0");
@@ -33,8 +46,8 @@ public sealed class GitHubReleases(HttpClient client)
         using var response = await client.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
         var data = await response.Content.ReadFromJsonAsync<List<GitHubRelease>>(cancellationToken: cancellationToken);
-        return ReleaseCatalog.SelectNewest((data ?? []).Select(x => new ModRelease(x.Tag ?? "", x.Prerelease, x.Draft, x.PublishedAt,
-            (x.Assets ?? []).Select(a => new ModAsset(a.Name ?? "", a.Url ?? "", a.Size, a.Digest)).ToArray())));
+        return (data ?? []).Select(x => new ModRelease(x.Tag ?? "", x.Prerelease, x.Draft, x.PublishedAt,
+            (x.Assets ?? []).Select(a => new ModAsset(a.Name ?? "", a.Url ?? "", a.Size, a.Digest)).ToArray())).ToArray();
     }
 
     private sealed class GitHubRelease

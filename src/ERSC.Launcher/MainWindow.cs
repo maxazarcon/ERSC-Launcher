@@ -34,6 +34,8 @@ public sealed class MainWindow : Window
     private readonly Button _restartUpdate = new();
     private readonly StackPanel _settings = new() { Orientation = Orientation.Vertical };
     private readonly Button _install = new();
+    private readonly Button _getRelease = new();
+    private readonly Button _nexus = new();
     private readonly Button _save = new();
     private readonly Button _launch = new();
     private readonly Button _check = new();
@@ -53,8 +55,9 @@ public sealed class MainWindow : Window
     private readonly List<(IniEntry Entry, Func<string> Read)> _editors = [];
     private LauncherState _state;
     private string? _game;
+    private IReadOnlyList<ModRelease>? _releases;
     private ModRelease? _release;
-    private ModAsset? _asset;
+    private string? _found;
     private string? _stage;
     private IniDocument? _ini;
     private bool _busy;
@@ -70,7 +73,7 @@ public sealed class MainWindow : Window
         _gamepadMode = gamepadMode;
         _store = new StateStore(_dataDir);
         _state = _store.Load();
-        Title = "Seamless Co-Op Launcher";
+        Title = SteamShortcuts.AppName;
         Width = 860; Height = 760; MinWidth = 680; MinHeight = 540;
         Background = BackgroundBrush; Foreground = TextBrush;
         FontFamily = new FontFamily("Segoe UI"); FontSize = 14;
@@ -148,7 +151,7 @@ public sealed class MainWindow : Window
         }
         footerStack.Children.Add(_hints);
         UpdateHints();
-        body.Children.Add(Label("SEAMLESS CO-OP", 12, GoldBrush, new Thickness(0, 0, 0, 4)));
+        body.Children.Add(Label("SEAMLESS CO-OP · UNOFFICIAL LAUNCHER", 12, GoldBrush, new Thickness(0, 0, 0, 4)));
         var heading = Label("Your way into the Lands Between", 26, TextBrush, new Thickness(0, 0, 0, 20)); heading.FontWeight = FontWeights.SemiBold;
         body.Children.Add(heading);
 
@@ -169,13 +172,19 @@ public sealed class MainWindow : Window
         _status.Foreground = MutedBrush; state.Children.Add(_status);
         _version.Foreground = MutedBrush; _version.FontSize = 12; _version.Margin = new Thickness(0, 4, 0, 0); state.Children.Add(_version);
         state.Children.Add(_progress);
-        _install.Content = "Install Seamless Co-Op"; StyleButton(_install); _install.Margin = new Thickness(0, 14, 0, 0); _install.HorizontalAlignment = HorizontalAlignment.Left;
-        _install.Click += async (_, _) => await InstallAsync(); state.Children.Add(_install);
+        // The player downloads the mod themselves from the author's pages; the launcher only installs the ZIP they chose.
+        var installRow = new WrapPanel { Margin = new Thickness(0, 14, 0, 0) }; state.Children.Add(installRow);
+        StyleButton(_install); _install.Click += async (_, _) => await InstallFromZipAsync(_found); installRow.Children.Add(_install);
+        _getRelease.Content = "Get latest release"; StyleButton(_getRelease); _getRelease.Margin = new Thickness(8, 0, 0, 0);
+        _getRelease.Click += (_, _) => OpenPage(ReleaseCatalog.ReleasePageUrl(_release?.Tag)); installRow.Children.Add(_getRelease);
+        _nexus.Content = "Nexus page"; StyleButton(_nexus); _nexus.Margin = new Thickness(8, 0, 0, 0);
+        _nexus.Click += (_, _) => OpenPage(ReleaseCatalog.NexusUrl); installRow.Children.Add(_nexus);
 
         var settingsHeading = Label("Settings", 20, TextBrush, new Thickness(0, 28, 0, 4)); settingsHeading.FontWeight = FontWeights.SemiBold;
         body.Children.Add(settingsHeading);
         body.Children.Add(Label("Changes are saved to the mod's settings file in your game folder.", 13, MutedBrush, new Thickness(0, 0, 0, 4)));
         body.Children.Add(_settings);
+        body.Children.Add(Label("This launcher is unofficial and is not made by or affiliated with the Seamless Co-Op author. It never includes or hosts the mod: get it from the mod's Nexus Mods page or its official GitHub releases.", 12, MutedBrush, new Thickness(0, 28, 0, 0)));
         UpdateButtons();
         return root;
     }
@@ -271,7 +280,7 @@ public sealed class MainWindow : Window
 
     private async Task SetGameAsync(string? game)
     {
-        _game = game; _release = null; _asset = null; _current = false; CleanupStage();
+        _game = game; _release = null; _found = null; _current = false; CleanupStage();
         _gameText.Text = game ?? "No Steam installation found. Choose the folder containing eldenring.exe.";
         _state.SelectedGame = game; _store.Save(_state);
         LoadSettings(); UpdateButtons();
@@ -285,46 +294,52 @@ public sealed class MainWindow : Window
         _busy = true; UpdateButtons(); SetStatus("Checking published releases…");
         try
         {
-            _release = await new GitHubReleases(_http).GetNewestAsync();
-            _asset = ReleaseCatalog.SelectZip(_release);
-            _current = false;
-            if (ModFingerprint.IsInstalled(_game))
+            _releases = await new GitHubReleases(_http).GetRecentAsync();
+            _release = ReleaseCatalog.SelectNewest(_releases);
+            var asset = ReleaseCatalog.SelectZip(_release);
+            _current = false; _found = null;
+            var installed = ModFingerprint.IsInstalled(_game);
+            _state.Installs.TryGetValue(_game, out var record);
+            var recorded = installed && record is not null && StateStore.Matches(_game, record);
+            if (recorded) _current = record!.Tag.Equals(_release.Tag, StringComparison.OrdinalIgnoreCase);
+            if (!_current) _found = await Task.Run(() => ModPackage.FindDownloaded(DownloadsFolder(), asset));
+            if (installed && !recorded && _found is not null)
             {
-                if (_state.Installs.TryGetValue(_game, out var record) && StateStore.Matches(_game, record))
+                // Installed by hand or by an older launcher: compare against the matching ZIP the player already has.
+                try
                 {
-                    _current = record.Tag.Equals(_release.Tag, StringComparison.OrdinalIgnoreCase);
-                    SetStatus(_current ? "Seamless Co-Op is up to date." : $"Version {record.Tag} is installed. {_release.Tag} is available.");
-                }
-                else
-                {
-                    await PrepareAsync();
+                    await Task.Run(() => Stage(_found));
                     _current = ModFingerprint.Matches(_game, _stage!);
-                    SetStatus(_current ? "The installed mod files match the latest release." : "Seamless Co-Op is installed, but its version cannot be verified. You can install the latest release.");
+                    if (_current) _found = null;
                 }
+                catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) { _found = null; }
+                finally { CleanupStage(); }
             }
-            else SetStatus("Seamless Co-Op is not installed. Install the latest release to continue.");
+            var next = _found is not null ? $" Found {Path.GetFileName(_found)} in your Downloads folder, ready to install."
+                : $" Select Get latest release, download the {_release.Tag} ZIP, then choose Install from ZIP.";
+            if (_current) SetStatus("Seamless Co-Op is up to date.");
+            else if (recorded && record!.Tag == StateStore.UnverifiedTag) SetStatus($"A ZIP that could not be verified is installed. {_release.Tag} is the latest release." + next);
+            else if (recorded) SetStatus($"Version {record!.Tag} is installed. {_release.Tag} is available." + next);
+            else if (installed) SetStatus("Seamless Co-Op is installed, but its version cannot be verified." + next);
+            else SetStatus("Seamless Co-Op is not installed." + next);
             _version.Text = "Latest published release: " + _release.Tag + (_release.Prerelease ? " (beta)" : "");
         }
         catch (Exception ex)
         {
-            _release = null; _asset = null; _current = false;
+            _releases = null; _release = null; _found = null; _current = false;
             _version.Text = "Latest version unavailable";
             SetStatus((ModFingerprint.IsInstalled(_game) ? "Installed settings and Launch remain available. " : "") + "Could not check GitHub: " + ex.Message);
         }
         finally { _busy = false; UpdateButtons(); }
     }
 
-    private async Task PrepareAsync()
+    private void Stage(string zip)
     {
-        if (_asset is null) throw new InvalidOperationException("No release asset was selected.");
-        if (_stage is not null && ModFingerprint.IsInstalled(_stage)) return;
         CleanupStage();
         var folder = Path.Combine(_dataDir, "staging", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(folder);
         try
         {
-            var zip = Path.Combine(folder, "release.zip");
-            await ModPackage.DownloadAsync(_http, _asset, zip);
             var extracted = Path.Combine(folder, "extracted");
             ModPackage.Extract(zip, extracted);
             _stage = extracted;
@@ -332,27 +347,67 @@ public sealed class MainWindow : Window
         catch { Directory.Delete(folder, true); throw; }
     }
 
-    private async Task InstallAsync()
+    /// <summary>Installs a ZIP the player downloaded. Without a path, asks for one.</summary>
+    private async Task InstallFromZipAsync(string? zip)
     {
-        if (_game is null || _release is null || _busy || _current) return;
-        var existing = ModFingerprint.IsInstalled(_game);
-        if (existing && await AskAsync("Update Seamless Co-Op", "Install " + _release.Tag + "? Existing mod files and settings will be backed up before replacement.", ["Install", "Cancel"]) != 0) return;
+        if (_game is null || _busy) return;
+        if (zip is null)
+        {
+            var dialog = new OpenFileDialog { Title = "Choose the Seamless Co-Op ZIP you downloaded", Filter = "ZIP archives (*.zip)|*.zip", InitialDirectory = DownloadsFolder() };
+            if (dialog.ShowDialog(this) != true) return;
+            zip = dialog.FileName;
+        }
         if (Process.GetProcessesByName("eldenring").Length > 0 || Process.GetProcessesByName("ersc_launcher").Length > 0)
         { await AlertAsync("Game is running", "Close Elden Ring before installing or updating the mod."); return; }
-        _busy = true; UpdateButtons(); SetStatus(existing ? "Updating Seamless Co-Op…" : "Installing Seamless Co-Op…");
+        var existing = ModFingerprint.IsInstalled(_game);
+        var backupNote = existing ? " Existing mod files and settings will be backed up before replacement." : "";
+        _busy = true; UpdateButtons(); SetStatus("Checking " + Path.GetFileName(zip) + "…");
         try
         {
-            await PrepareAsync();
+            var release = await Task.Run(() => ModPackage.Identify(zip, _releases ?? []));
+            if (release is null)
+            {
+                var reason = _releases is null
+                    ? "The published releases could not be checked, so this ZIP can't be verified."
+                    : "This ZIP doesn't match any recent Seamless Co-Op release on GitHub.";
+                if (await AskAsync("Unverified ZIP", reason + " Only install files from the mod's Nexus page or its GitHub releases. Install it anyway?" + backupNote, ["Install", "Cancel"]) != 0)
+                { SetStatus("Nothing was installed."); return; }
+            }
+            else if (existing && await AskAsync("Update Seamless Co-Op", "Install " + release.Tag + "?" + backupNote, ["Install", "Cancel"]) != 0)
+            { SetStatus("Nothing was installed."); return; }
+            var tag = release?.Tag ?? StateStore.UnverifiedTag;
+            SetStatus(existing ? "Updating Seamless Co-Op…" : "Installing Seamless Co-Op…");
+            await Task.Run(() => Stage(zip));
             var backup = ModInstaller.Install(_game, _stage!, Path.Combine(_dataDir, "backups", SafeFolderName(_game)));
-            _state.Installs[_game] = StateStore.Record(_release.Tag, _game, _stage!);
+            _state.Installs[_game] = StateStore.Record(tag, _game, _stage!);
             _store.Save(_state);
             LoadSettings();
-            _current = true;
-            SetStatus("Installed " + _release.Tag + ". Backup: " + backup);
+            _current = release is not null && _release is not null && release.Tag.Equals(_release.Tag, StringComparison.OrdinalIgnoreCase);
+            _found = null;
+            SetStatus((release is null ? "Installed the unverified ZIP." : "Installed " + tag + ".") + " Backup: " + backup);
         }
         catch (Exception ex) { SetStatus("Install failed: " + ex.Message); await AlertAsync("Install failed", ex.Message); }
         finally { CleanupStage(); _busy = false; UpdateButtons(); }
     }
+
+    private void OpenPage(string url)
+    {
+        try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }); }
+        catch (Exception ex) { _ = AlertAsync("Could not open the page", url + "\n" + ex.Message); }
+    }
+
+    private static string DownloadsFolder()
+    {
+        try
+        {
+            if (SHGetKnownFolderPath(new Guid("374DE290-123F-4565-9164-39C4925E467B"), 0, IntPtr.Zero, out var path) == 0) return path;
+        }
+        catch { }
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+    }
+
+    [System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern int SHGetKnownFolderPath([System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPStruct)] Guid id, uint flags, IntPtr token, out string path);
 
     private void LoadSettings()
     {
@@ -516,8 +571,9 @@ public sealed class MainWindow : Window
     private void UpdateSteamButton()
     {
         var added = SteamIntegration.IsAdded();
-        _steam.Content = added ? "Added to Steam" : "Add to Steam";
-        _steam.IsEnabled = !added;
+        var rename = added && SteamIntegration.HasLegacyName();
+        _steam.Content = rename ? "Update Steam shortcut" : added ? "Added to Steam" : "Add to Steam";
+        _steam.IsEnabled = !added || rename;
     }
 
     private void UpdateHints()
@@ -630,7 +686,8 @@ public sealed class MainWindow : Window
     {
         if (_password is { IsVisible: true } password && string.IsNullOrWhiteSpace(password.Password)) password.Focus();
         else if (_launch.IsEnabled) _launch.Focus();
-        else if (_install.IsEnabled && _install.IsVisible) _install.Focus();
+        else if (_found is not null && _install.IsEnabled) _install.Focus();
+        else if (_game is not null && !ModFingerprint.IsInstalled(_game) && _getRelease.IsEnabled) _getRelease.Focus();
         else _main.MoveFocus(new TraversalRequest(FocusNavigationDirection.First));
     }
 
@@ -639,8 +696,8 @@ public sealed class MainWindow : Window
     private void UpdateButtons()
     {
         _check.IsEnabled = !_busy && _game is not null;
-        _install.IsEnabled = !_busy && _game is not null && _release is not null && !_current;
-        _install.Content = _game is not null && ModFingerprint.IsInstalled(_game) ? "Install latest release" : "Install Seamless Co-Op";
+        _install.IsEnabled = !_busy && _game is not null;
+        _install.Content = _found is not null ? "Install " + Path.GetFileName(_found) : "Install from ZIP…";
         _save.IsEnabled = !_busy && _ini is not null;
         _launch.IsEnabled = !_busy && CanLaunch();
         _progress.Visibility = _busy ? Visibility.Visible : Visibility.Collapsed;
