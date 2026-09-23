@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.0 — 2026-09-23
+
+- Press B on the main screen to quit (with a confirmation). View still quits too.
+- Show the Quit button whenever a controller is connected, not only in full screen.
+- Press RT to jump straight to the Launch button. RB does the same unless a slider is selected. If launching isn't possible yet, focus goes to what's missing instead.
+
 ## 1.4.0 — 2026-09-23
 
 - Add a per-user Windows installer with a Start Menu entry, optional desktop shortcut, and uninstaller. The portable EXE is still published.
