@@ -29,6 +29,7 @@ var tests = new (string Name, Action Run)[]
     ,("Steam shortcut ID matches Steam's non-Steam game scheme", TestSteamAppId)
     ,("Adding to Steam keeps other shortcuts, backs up, and does not duplicate", TestSteamAdd)
     ,("Removing from Steam deletes only the launcher entry", TestSteamRemove)
+    ,("Adding to Steam installs library artwork and keeps custom art", TestSteamArtwork)
 };
 var failed = 0;
 foreach (var test in tests)
@@ -368,6 +369,33 @@ static void TestSteamRemove()
     Equal(1, shortcuts.Children.Count);
     Equal("0", shortcuts.Children[0].Name);
     Equal("Other Game ☆", shortcuts.Children[0].GetString("AppName"));
+}
+static void TestSteamArtwork()
+{
+    var root = SteamRoot();
+    var exe = Path.Combine(root, "ERSCLauncher.exe");
+    var vdf = Path.Combine(root, "userdata", "12345", "config", "shortcuts.vdf");
+    var grid = Path.Combine(root, "userdata", "12345", "config", "grid");
+    var appId = SteamShortcuts.AppId("\"" + exe + "\"", SteamShortcuts.AppName);
+    Equal(Path.Combine(grid, $"{appId}_hero.png"), SteamShortcuts.ArtworkPath(vdf, exe, "_hero"));
+
+    Directory.CreateDirectory(grid);
+    File.WriteAllText(Path.Combine(grid, $"{appId}p.jpg"), "player's cover"); // Chosen in Steam before the launcher added art.
+    File.WriteAllText(Path.Combine(grid, $"{appId}.json"), "{}"); // Steam's logo position file, not a wide cover.
+    SteamShortcuts.Add(root, exe);
+    False(File.Exists(Path.Combine(grid, $"{appId}p.png")));
+    foreach (var (suffix, resource) in new[] { ("", "wide.png"), ("_hero", "hero.png"), ("_logo", "logo.png") })
+        True(File.ReadAllBytes(Path.Combine(grid, $"{appId}{suffix}.png")).SequenceEqual(SteamShortcuts.ArtworkBytes(resource)));
+
+    File.WriteAllText(Path.Combine(grid, $"{appId}_hero.png"), "player's banner");
+    SteamShortcuts.Add(root, exe);
+    Equal("player's banner", File.ReadAllText(Path.Combine(grid, $"{appId}_hero.png")));
+
+    SteamShortcuts.Remove(root, exe);
+    False(File.Exists(Path.Combine(grid, $"{appId}.png")));
+    False(File.Exists(Path.Combine(grid, $"{appId}_logo.png")));
+    True(File.Exists(Path.Combine(grid, $"{appId}p.jpg")));
+    True(File.Exists(Path.Combine(grid, $"{appId}_hero.png")));
 }
 sealed class FakeHandler(Func<HttpRequestMessage, HttpResponseMessage> answer) : HttpMessageHandler
 {

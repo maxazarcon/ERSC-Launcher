@@ -1,0 +1,263 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+@font-face { font-family: Cinzel; font-weight: 500; src: url(Cinzel-Medium.ttf); }
+@font-face { font-family: Cinzel; font-weight: 700; src: url(Cinzel-Bold.ttf); }
+body { margin: 0; background: #000; }
+</style></head>
+<body>
+<script>
+// Procedural Steam library art for the Seamless Co-Op Launcher.
+function rng(seed) {
+  return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+
+const GOLD = [255, 206, 120];
+const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+
+// Scene: dark vale, a tree of golden light on the horizon, two travellers on a ridge.
+function scene(ctx, W, H, o) {
+  const R = rng(o.seed ?? 7);
+  const S = o.scale;                // world unit -> pixels
+  const tx = o.treeX * W, ground = o.horizon * H;
+  const treeH = o.treeH * S;
+
+  // Sky
+  let g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#07090a'); g.addColorStop(o.horizon * 0.8, '#161a14'); g.addColorStop(o.horizon, '#262619'); g.addColorStop(1, '#070807');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+
+  // Big warm bloom behind the canopy
+  const cy = ground - treeH * 0.78;
+  for (const [r, a] of [[treeH * 2.2, 0.16], [treeH * 1.2, 0.20], [treeH * 0.55, 0.22]]) {
+    g = ctx.createRadialGradient(tx, cy, 0, tx, cy, r);
+    g.addColorStop(0, rgba(GOLD, a)); g.addColorStop(1, rgba(GOLD, 0));
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  }
+
+  // God rays
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < 26; i++) {
+    const a = -Math.PI / 2 + (R() - 0.5) * Math.PI * 1.6, w = 0.01 + R() * 0.035, L = Math.max(W, H) * 1.5;
+    g = ctx.createRadialGradient(tx, cy, 0, tx, cy, L);
+    g.addColorStop(0, rgba(GOLD, 0.05 + R() * 0.05)); g.addColorStop(1, rgba(GOLD, 0));
+    ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(tx, cy);
+    ctx.lineTo(tx + Math.cos(a - w) * L, cy + Math.sin(a - w) * L); ctx.lineTo(tx + Math.cos(a + w) * L, cy + Math.sin(a + w) * L); ctx.fill();
+  }
+  ctx.restore();
+
+  // Tree of light
+  const segs = [], tips = [];
+  function branch(x, y, a, len, w, d) {
+    const bend = (R() - 0.5) * 0.5;
+    const mx = x + Math.cos(a + bend) * len * 0.5, my = y + Math.sin(a + bend) * len * 0.5;
+    const ex = x + Math.cos(a) * len, ey = y + Math.sin(a) * len;
+    segs.push([x, y, mx, my, ex, ey, w]);
+    if (d === 0 || len < 2) { tips.push([ex, ey]); return; }
+    const n = d > 4 ? 2 : 2 + (R() < 0.3);
+    for (let i = 0; i < n; i++) {
+      const spread = 0.42 + R() * 0.3;
+      let na = a + spread * (i - (n - 1) / 2) + (R() - 0.5) * 0.25;
+      // Crown droops outward as it thins, giving a broad canopy.
+      const side = Math.cos(na) >= 0 ? 1 : -1;
+      na += side * 0.035 * (8 - d);
+      branch(ex, ey, na, len * (0.7 + R() * 0.12), w * 0.68, d - 1);
+    }
+  }
+  // Twisted trunk: several strands braided together
+  const top = ground - treeH * 0.45;
+  for (let s = 0; s < 5; s++) {
+    const ph = s / 5 * Math.PI * 2; let px = tx, py = ground;
+    for (let t = 1; t <= 24; t++) {
+      const f = t / 24, y = ground - (ground - top) * f;
+      const x = tx + Math.sin(ph + f * 6) * S * (3.4 - f * 2.2);
+      segs.push([px, py, (px + x) / 2, (py + y) / 2, x, y, S * (0.75 - f * 0.3)]); px = x; py = y;
+    }
+  }
+  const mains = 9;
+  for (let i = 0; i < mains; i++) {
+    const k = (i - (mains - 1) / 2) / ((mains - 1) / 2);
+    const a = -Math.PI / 2 + k * 1.05 + (R() - 0.5) * 0.1;
+    branch(tx + k * S * 1.5, top + Math.abs(k) * S * 8, a, treeH * 0.2 * (1 - Math.abs(k) * 0.15), S * 0.9, S >= 3.5 ? 7 : 6);
+  }
+  // Roots
+  for (let i = 0; i < 7; i++) {
+    const a = Math.PI / 2 + (i - 3) * 0.42;
+    branch(tx, ground - S * 1, a, treeH * 0.05, S * 0.6, 4);
+  }
+
+  // Strokes go on an offscreen layer; glow comes from blurring that layer once.
+  const layer = document.createElement('canvas'); layer.width = W; layer.height = H;
+  const lc = layer.getContext('2d'); lc.lineCap = 'round';
+  // Twigs thinner than a pixel get fainter instead, so the crown stays lacy rather than solid.
+  const pass = (mul, color, alpha) => {
+    lc.strokeStyle = color;
+    for (const [x, y, mx, my, ex, ey, w] of segs) {
+      const px = w * mul; lc.lineWidth = Math.max(0.7, px); lc.globalAlpha = alpha * Math.min(1, (px / 1.4) ** 1.5);
+      lc.beginPath(); lc.moveTo(x, y); lc.quadraticCurveTo(mx, my, ex, ey); lc.stroke();
+    }
+    lc.globalAlpha = 1;
+  };
+  pass(2.2, rgba(GOLD, 1), 0.35);
+  pass(0.8, "rgb(255,236,190)", 0.85);
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  // Blur on a plain canvas first; filters combined with 'lighter' saturate in Chromium.
+  const blurred = (px) => { const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const x = c.getContext('2d'); x.filter = `blur(${px}px)`; x.drawImage(layer, 0, 0); return c; };
+  ctx.globalAlpha = 0.9; ctx.drawImage(blurred(S * 5), 0, 0);
+  ctx.globalAlpha = 0.8; ctx.drawImage(blurred(S * 1.2), 0, 0);
+  ctx.globalAlpha = 1; ctx.drawImage(layer, 0, 0);
+  // Leaves of light at the tips
+  for (const [x, y] of tips) {
+    const r = S * (0.4 + R() * 0.9);
+    g = ctx.createRadialGradient(x, y, 0, x, y, r * 3);
+    g.addColorStop(0, rgba([255, 235, 180], 0.18 + R() * 0.2)); g.addColorStop(1, rgba(GOLD, 0));
+    ctx.fillStyle = g; ctx.fillRect(x - r * 3, y - r * 3, r * 6, r * 6);
+  }
+  ctx.restore();
+
+  // Mountain layers (near layers darker)
+  const layers = o.layers;
+  layers.forEach(([base, amp, col, haze], li) => {
+    const by = base * H;
+    ctx.beginPath(); ctx.moveTo(0, H);
+    let y = by;
+    for (let x = 0; x <= W + 8; x += 6) {
+      const u = x / 900;
+      y = by - amp * H * (0.55 + 0.3 * Math.sin(u * (3 + li * 2.3) + li * 1.7) + 0.12 * Math.sin(u * 11 + li * 4) + 0.05 * Math.sin(u * 37 + li));
+      y += (R() - 0.5) * H * 0.003;
+      ctx.lineTo(x, y);
+    }
+    ctx.lineTo(W, H); ctx.closePath(); ctx.fillStyle = col; ctx.fill();
+    // Mist sitting on the layer
+    g = ctx.createLinearGradient(0, by - amp * H, 0, by + H * 0.08);
+    g.addColorStop(0, rgba([200, 175, 120], 0)); g.addColorStop(0.6, rgba([200, 175, 120], haze)); g.addColorStop(1, rgba([200, 175, 120], 0));
+    ctx.fillStyle = g; ctx.fillRect(0, by - amp * H, W, H * 0.2);
+  });
+
+  // Foreground ridge with two travellers
+  if (o.ridge) {
+    const [rx, ry, rs] = o.ridge; // position (fractions) and figure height in px
+    const baseY = ry * H;
+    g = ctx.createRadialGradient(rx * W, baseY - rs * 0.4, 0, rx * W, baseY - rs * 0.4, rs * 5);
+    g.addColorStop(0, rgba([220, 185, 120], 0.35)); g.addColorStop(1, rgba([220, 185, 120], 0));
+    ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = g; ctx.fillRect(0, 0, W, H); ctx.restore();
+    ctx.beginPath(); ctx.moveTo(-10, H);
+    ctx.lineTo(-10, baseY + rs * 0.6);
+    ctx.bezierCurveTo(rx * W - rs * 3, baseY + rs * 0.15, rx * W - rs, baseY, rx * W, baseY);
+    ctx.bezierCurveTo(rx * W + rs * 2, baseY, rx * W + rs * 5, baseY + rs * 0.5, W + 10, baseY + rs * 1.3);
+    ctx.lineTo(W + 10, H); ctx.closePath(); ctx.fillStyle = '#040504'; ctx.fill();
+    figure(ctx, rx * W - rs * 0.34, baseY + 1, rs, 'sword');
+    figure(ctx, rx * W + rs * 0.34, baseY + 1, rs * 0.94, 'staff');
+  }
+
+  // Floating motes
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < o.motes; i++) {
+    const x = R() * W, y = R() * H * 0.95, r = (0.3 + R() * R() * 1.2) * S * 0.4;
+    g = ctx.createRadialGradient(x, y, 0, x, y, r * 4);
+    g.addColorStop(0, rgba([255, 230, 170], 0.25 + 0.6 * R())); g.addColorStop(0.3, rgba(GOLD, 0.15)); g.addColorStop(1, rgba(GOLD, 0));
+    ctx.fillStyle = g; ctx.fillRect(x - r * 4, y - r * 4, r * 8, r * 8);
+  }
+  ctx.restore();
+
+  // Vignette
+  g = ctx.createRadialGradient(W / 2, H * 0.45, Math.min(W, H) * 0.3, W / 2, H * 0.45, Math.hypot(W, H) * 0.62);
+  g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,0.75)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+}
+
+// Cloaked traveller silhouette standing on (x, y), h pixels tall, facing the tree.
+function figure(ctx, x, y, h, item) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(h / 100, h / 100); ctx.fillStyle = '#040504'; ctx.strokeStyle = '#040504';
+  // head / hood
+  ctx.beginPath(); ctx.ellipse(0, -88, 7, 8.5, 0, 0, Math.PI * 2); ctx.fill();
+  // shoulders and cloak, flaring and tattered at the hem
+  ctx.beginPath(); ctx.moveTo(-6, -82);
+  ctx.bezierCurveTo(-14, -78, -15, -66, -16, -50);
+  ctx.bezierCurveTo(-18, -30, -24, -14, -22, -4);
+  ctx.lineTo(-17, -9); ctx.lineTo(-14, -1); ctx.lineTo(-10, -7); ctx.lineTo(-7, 0);
+  ctx.lineTo(-4, -2); ctx.lineTo(-3, 0); ctx.lineTo(4, 0); ctx.lineTo(5, -3); ctx.lineTo(9, 0);
+  ctx.bezierCurveTo(12, -20, 14, -40, 14, -52);
+  ctx.bezierCurveTo(14, -68, 12, -79, 6, -82); ctx.closePath(); ctx.fill();
+  ctx.lineCap = 'round';
+  if (item === 'sword') {
+    // blade resting point-down in front
+    ctx.lineWidth = 2.4; ctx.beginPath(); ctx.moveTo(16, -50); ctx.lineTo(24, 0); ctx.stroke();
+    ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(10, -46); ctx.lineTo(21, -48); ctx.stroke();
+    ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(13, -48); ctx.lineTo(16, -60); ctx.stroke();
+  } else {
+    ctx.lineWidth = 2.6; ctx.beginPath(); ctx.moveTo(-20, 0); ctx.lineTo(-17, -112); ctx.stroke();
+    ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(-17, -118, 6, Math.PI * 0.2, Math.PI * 1.9); ctx.stroke();
+    ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(-12, -60); ctx.lineTo(-18, -66); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// Title lockup centred on (cx, cy), `size` is the cap height of the main line in px.
+function title(ctx, cx, cy, size, opts = {}) {
+  ctx.save(); ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  const main = 'SEAMLESS CO-OP', sub = 'L A U N C H E R';
+  ctx.font = `700 ${size}px Cinzel`;
+  let mw = ctx.measureText(main).width;
+  if (opts.maxWidth && mw > opts.maxWidth) { size *= opts.maxWidth / mw; ctx.font = `700 ${size}px Cinzel`; mw = opts.maxWidth; }
+  const g = ctx.createLinearGradient(0, cy - size, 0, cy);
+  g.addColorStop(0, '#fff3cf'); g.addColorStop(0.5, '#e6c986'); g.addColorStop(1, '#b08a3e');
+  // legibility shadow, then glow, then the gold face
+  if (!opts.noShadow) { ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = size * 0.5; ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillText(main, cx, cy); }
+  ctx.shadowColor = 'rgba(255,200,110,0.55)'; ctx.shadowBlur = size * 0.35;
+  ctx.fillStyle = g; ctx.fillText(main, cx, cy);
+  ctx.shadowBlur = 0;
+  // rule with a diamond
+  const ry = cy + size * 0.42, half = mw * 0.5;
+  const lg = ctx.createLinearGradient(cx - half, 0, cx + half, 0);
+  lg.addColorStop(0, 'rgba(215,182,107,0)'); lg.addColorStop(0.5, 'rgba(215,182,107,1)'); lg.addColorStop(1, 'rgba(215,182,107,0)');
+  ctx.fillStyle = lg; ctx.fillRect(cx - half, ry - size * 0.015, mw, Math.max(1, size * 0.03));
+  ctx.fillStyle = '#e6c986'; ctx.beginPath(); const d = size * 0.09;
+  ctx.moveTo(cx, ry - d); ctx.lineTo(cx + d, ry); ctx.lineTo(cx, ry + d); ctx.lineTo(cx - d, ry); ctx.fill();
+  // subtitle
+  ctx.font = `500 ${size * 0.36}px Cinzel`; ctx.fillStyle = '#d7b66b';
+  if (!opts.noShadow) { ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = size * 0.3; }
+  ctx.fillText(sub, cx, ry + size * 0.56);
+  ctx.restore();
+}
+
+function canvas(W, H) { const c = document.createElement('canvas'); c.width = W; c.height = H; document.body.appendChild(c); return c; }
+
+const layerSet = (h) => [
+  [h + 0.005, 0.05, '#171a14', 0.10],
+  [h + 0.05, 0.07, '#10130e', 0.08],
+  [h + 0.11, 0.06, '#0a0c09', 0.06],
+];
+
+window.render = async () => {
+  await document.fonts.load('700 40px Cinzel'); await document.fonts.load('500 40px Cinzel');
+  if (!document.fonts.check('700 40px Cinzel') || !document.fonts.check('500 40px Cinzel')) throw new Error('Cinzel did not load');
+  const out = {};
+
+  // Portrait capsule 600x900
+  let c = canvas(600, 900), x = c.getContext('2d');
+  scene(x, 600, 900, { seed: 11, treeX: 0.5, horizon: 0.5, treeH: 105, scale: 3.6, motes: 70, layers: layerSet(0.5), ridge: [0.5, 0.78, 58] });
+  title(x, 300, 800, 54, { maxWidth: 520 });
+  out.portrait = c.toDataURL('image/png');
+
+  // Wide capsule 920x430
+  c = canvas(920, 430); x = c.getContext('2d');
+  scene(x, 920, 430, { seed: 5, treeX: 0.76, horizon: 0.64, treeH: 72, scale: 2.8, motes: 60, layers: layerSet(0.64), ridge: [0.62, 0.9, 32] });
+  title(x, 250, 215, 52, { maxWidth: 420 });
+  out.wide = c.toDataURL('image/png');
+
+  // Hero 1920x620 (logo sits bottom-left, so keep the art to the right)
+  c = canvas(1920, 620); x = c.getContext('2d');
+  scene(x, 1920, 620, { seed: 3, treeX: 0.66, horizon: 0.66, treeH: 108, scale: 4, motes: 140, layers: layerSet(0.66), ridge: [0.84, 0.92, 52] });
+  out.hero = c.toDataURL('image/png');
+
+  // Logo 1280x440, transparent
+  c = canvas(1280, 440); x = c.getContext('2d');
+  title(x, 640, 250, 118, { maxWidth: 1180 });
+  out.logo = c.toDataURL('image/png');
+  return out;
+};
+</script>
+</body></html>

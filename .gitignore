@@ -4,3 +4,4 @@
 .vs/
 dist/
 *.user
+node_modules/
