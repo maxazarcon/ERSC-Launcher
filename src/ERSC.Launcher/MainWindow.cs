@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Markup;
 using System.Windows.Media;
 using ERSC.Launcher.Core;
 using Microsoft.Win32;
@@ -21,6 +22,7 @@ public sealed class MainWindow : Window
     private static readonly Brush MutedBrush = Color("#AAB3A3");
     private static readonly Brush GoldBrush = Color("#D7B66B");
     private static readonly Brush DividerBrush = Color("#2F362D");
+    private static readonly Lazy<Style?> ChoiceStyle = new(() => { try { return (Style)XamlReader.Parse(ChoiceXaml); } catch { return null; } });
     private readonly string _dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ERSC Launcher");
     private readonly StateStore _store;
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromMinutes(3) };
@@ -341,17 +343,10 @@ public sealed class MainWindow : Window
                 var choice = new ComboBox
                 {
                     ItemsSource = presentation.Options, DisplayMemberPath = nameof(SettingOption.Label), SelectedValuePath = nameof(SettingOption.Value),
-                    SelectedValue = entry.Value, Width = 280, HorizontalAlignment = HorizontalAlignment.Left,
-                    Background = Brushes.White, Foreground = Brushes.Black, BorderBrush = MutedBrush, Padding = new Thickness(8, 5, 8, 5)
+                    SelectedValue = entry.Value, Width = 280, HorizontalAlignment = HorizontalAlignment.Left
                 };
-                var itemStyle = new Style(typeof(ComboBoxItem));
-                itemStyle.Setters.Add(new Setter(Control.BackgroundProperty, Brushes.White));
-                itemStyle.Setters.Add(new Setter(Control.ForegroundProperty, Brushes.Black));
-                var highlighted = new Trigger { Property = ComboBoxItem.IsHighlightedProperty, Value = true };
-                highlighted.Setters.Add(new Setter(Control.BackgroundProperty, GoldBrush));
-                highlighted.Setters.Add(new Setter(Control.ForegroundProperty, BackgroundBrush));
-                itemStyle.Triggers.Add(highlighted);
-                choice.ItemContainerStyle = itemStyle;
+                if (ChoiceStyle.Value is { } style) choice.Style = style;
+                else { choice.Background = Brushes.White; choice.Foreground = Brushes.Black; }
                 AutomationProperties.SetName(choice, presentation.Label);
                 return (choice, () => choice.SelectedValue?.ToString() ?? entry.Value);
             }
@@ -465,6 +460,84 @@ public sealed class MainWindow : Window
     private static TextBlock Label(string text, double size, Brush color, Thickness margin) => new() { Text = text, FontSize = size, Foreground = color, Margin = margin, TextWrapping = TextWrapping.Wrap };
     private static StackPanel Panel() => new() { Orientation = Orientation.Vertical };
     private static Border Wrap(StackPanel panel) => new() { Background = PanelBrush, Padding = new Thickness(16), Child = panel, CornerRadius = new CornerRadius(6) };
+    // Dark dropdown matching the text fields. The stock theme ignores Background on the closed face, so it needs its own template.
+    private const string ChoiceXaml = """
+        <Style xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" TargetType="ComboBox">
+          <Setter Property="Background" Value="#141713"/>
+          <Setter Property="Foreground" Value="#EEEDE3"/>
+          <Setter Property="BorderBrush" Value="#AAB3A3"/>
+          <Setter Property="Cursor" Value="Hand"/>
+          <Setter Property="SnapsToDevicePixels" Value="True"/>
+          <Setter Property="ItemContainerStyle">
+            <Setter.Value>
+              <Style TargetType="ComboBoxItem">
+                <Setter Property="Foreground" Value="#EEEDE3"/>
+                <Setter Property="Template">
+                  <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                      <Border x:Name="Row" Background="Transparent" Padding="10,7" CornerRadius="2">
+                        <ContentPresenter/>
+                      </Border>
+                      <ControlTemplate.Triggers>
+                        <Trigger Property="IsSelected" Value="True">
+                          <Setter TargetName="Row" Property="Background" Value="#2F362D"/>
+                        </Trigger>
+                        <Trigger Property="IsHighlighted" Value="True">
+                          <Setter TargetName="Row" Property="Background" Value="#D7B66B"/>
+                          <Setter Property="Foreground" Value="#141713"/>
+                        </Trigger>
+                      </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                  </Setter.Value>
+                </Setter>
+              </Style>
+            </Setter.Value>
+          </Setter>
+          <Setter Property="Template">
+            <Setter.Value>
+              <ControlTemplate TargetType="ComboBox">
+                <Grid>
+                  <ToggleButton Focusable="False" ClickMode="Press" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                    <ToggleButton.Template>
+                      <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="Chrome" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" CornerRadius="3">
+                          <Path HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,12,0" Data="M 0 0 L 4 4 L 8 0" Stroke="#D7B66B" StrokeThickness="1.5"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                          <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="BorderBrush" Value="#D7B66B"/>
+                          </Trigger>
+                          <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Chrome" Property="BorderBrush" Value="#D7B66B"/>
+                          </Trigger>
+                        </ControlTemplate.Triggers>
+                      </ControlTemplate>
+                    </ToggleButton.Template>
+                  </ToggleButton>
+                  <ContentPresenter IsHitTestVisible="False" Margin="10,6,32,6" VerticalAlignment="Center"
+                                    Content="{TemplateBinding SelectionBoxItem}" ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                    ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}" ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}"/>
+                  <Popup IsOpen="{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}}" Placement="Bottom" AllowsTransparency="True" Focusable="False" PopupAnimation="Fade">
+                    <Border Background="#20251F" BorderBrush="#AAB3A3" BorderThickness="1" CornerRadius="3" Margin="0,2,0,0" Padding="3"
+                            MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}" MaxHeight="{TemplateBinding MaxDropDownHeight}">
+                      <ScrollViewer>
+                        <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"/>
+                      </ScrollViewer>
+                    </Border>
+                  </Popup>
+                </Grid>
+                <ControlTemplate.Triggers>
+                  <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.4"/>
+                  </Trigger>
+                </ControlTemplate.Triggers>
+              </ControlTemplate>
+            </Setter.Value>
+          </Setter>
+        </Style>
+        """;
+
     private static TextBlock Heading(string text)
     {
         var heading = Label(text, 16, TextBrush, new Thickness(0, 0, 0, 6));

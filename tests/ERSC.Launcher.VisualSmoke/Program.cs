@@ -56,8 +56,8 @@ internal static class Program
         Console.WriteLine(args[0]);
 
         var combo = controls.OfType<System.Windows.Controls.ComboBox>().Single();
-        if (combo.Background is not System.Windows.Media.SolidColorBrush background || background.Color != Colors.White ||
-            combo.Foreground is not System.Windows.Media.SolidColorBrush foreground || foreground.Color != Colors.Black)
+        if (combo.Background is not System.Windows.Media.SolidColorBrush background || background.Color != (Color)ColorConverter.ConvertFromString("#141713") ||
+            combo.Foreground is not System.Windows.Media.SolidColorBrush foreground || foreground.Color != (Color)ColorConverter.ConvertFromString("#EEEDE3"))
             throw new Exception("Dropdown selected text lacks a high-contrast face.");
         var scroll = controls.OfType<System.Windows.Controls.ScrollViewer>().First(s => s.Content is System.Windows.Controls.StackPanel);
         scroll.ScrollToVerticalOffset(450);
