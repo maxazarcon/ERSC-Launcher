@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Move launcher update status into a slim footer so the game folder and installation come first.
+- Group settings into one card per section with dividers instead of a card per setting.
+- Add hover and pressed states to buttons, a progress bar while checking or installing, and a stronger type hierarchy.
+- Keep password and text fields at a readable width instead of stretching across the window.
+
 ## 1.2.0 — 2026-09-22
 
 - Check for stable launcher releases on startup and download a verified update in the background.
