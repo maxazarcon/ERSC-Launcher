@@ -1,0 +1,42 @@
+name: Build
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Test
+        shell: pwsh
+        run: |
+          dotnet restore tests/ERSC.Launcher.Tests/ERSC.Launcher.Tests.csproj --configfile NuGet.Config
+          dotnet run --no-restore --project tests/ERSC.Launcher.Tests/ERSC.Launcher.Tests.csproj -c Release
+          if ($LASTEXITCODE -ne 0) { throw "Tests failed" }
+      - name: Visual smoke test
+        shell: pwsh
+        run: |
+          dotnet restore tests/ERSC.Launcher.VisualSmoke/ERSC.Launcher.VisualSmoke.csproj --configfile NuGet.Config
+          dotnet run --no-restore --project tests/ERSC.Launcher.VisualSmoke/ERSC.Launcher.VisualSmoke.csproj -c Release -- visual/main.png
+          if ($LASTEXITCODE -ne 0) { throw "Visual smoke test failed" }
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-smoke
+          path: visual/
+          if-no-files-found: ignore
+      - name: Publish portable EXE and installer
+        shell: pwsh
+        run: |
+          [xml]$project = Get-Content src/ERSC.Launcher/ERSC.Launcher.csproj
+          ./installer/build.ps1 -Version $project.Project.PropertyGroup.Version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: launcher
+          path: dist/*.exe

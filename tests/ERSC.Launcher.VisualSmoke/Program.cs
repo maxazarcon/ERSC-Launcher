@@ -4,6 +4,10 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Automation;
+using System.Windows.Controls;
+using System.Windows.Documents;
+using System.Windows.Input;
+using System.Windows.Threading;
 using ERSC.Launcher;
 
 internal static class Program
@@ -18,6 +22,8 @@ internal static class Program
     private static void Run(string[] args)
     {
         if (args.Length != 1) throw new ArgumentException("Pass the screenshot PNG path.");
+        // Overlay dialogs complete through async continuations, which must come back to this UI thread.
+        SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
         _ = new Application();
         var window = new MainWindow();
         var game = Path.Combine(Path.GetTempPath(), "ersc-visual-" + Guid.NewGuid().ToString("N"), "Game");
@@ -80,6 +86,97 @@ internal static class Program
             !ini.Contains("; Allow players to invade the session.") || !ini.Contains("future_setting = custom"))
             throw new Exception("Settings controls did not preserve the edited INI values, comments, and unknown key.");
         Console.WriteLine("PASS Settings controls save values and preserve comments and unknown keys");
+
+        RunGamepad(window, game, Path.Combine(Path.GetDirectoryName(Path.GetFullPath(args[0]))!, "gamepad.png"));
+    }
+
+    // Drives the window with synthetic controller input. Keyboard focus needs a shown, active window,
+    // so the content moves into a plain host window (MainWindow itself would start discovering the game).
+    private static void RunGamepad(MainWindow window, string game, string screenshot)
+    {
+        var layers = (FrameworkElement)window.Content;
+        window.Content = null;
+        var host = new Window { Content = layers, Width = 860, Height = 760, Left = 0, Top = 0, WindowStartupLocation = WindowStartupLocation.Manual, WindowStyle = WindowStyle.None, ShowInTaskbar = false, Background = window.Background };
+        host.Show(); host.Activate(); Pump();
+        try
+        {
+            var controls = Descendants(layers).ToArray();
+            T Named<T>(string name) where T : FrameworkElement => controls.OfType<T>().First(c => AutomationProperties.GetName(c) == name);
+
+            var invade = Named<CheckBox>("Allow invasions");
+            invade.Focus(); Pump();
+            Check(invade.IsKeyboardFocused, "The test window has keyboard focus");
+            var wasChecked = invade.IsChecked == true;
+            window.HandleGamepad(GamepadButton.A); Pump();
+            Check(invade.IsChecked == !wasChecked, "A toggles a switch");
+            Check(AdornerLayer.GetAdornerLayer(invade)?.GetAdorners(invade)?.Length > 0, "The focused control has a focus ring");
+            window.HandleGamepad(GamepadButton.Down); Pump();
+            Check(Keyboard.FocusedElement is CheckBox next && AutomationProperties.GetName(next) == "Death debuffs", "Down moves to the next setting");
+
+            var volume = Named<Slider>("Volume before loading a save");
+            volume.Focus(); Pump();
+            var level = volume.Value;
+            window.HandleGamepad(GamepadButton.Right); Pump();
+            Check(volume.Value == level + 1, "Right raises a slider");
+            window.HandleGamepad(GamepadButton.LeftShoulder); Pump();
+            Check(volume.Value == Math.Max(0, level + 1 - 5), "A bumper moves a slider in large steps");
+
+            var choice = controls.OfType<ComboBox>().Single();
+            choice.Focus(); Pump();
+            var index = choice.SelectedIndex;
+            window.HandleGamepad(GamepadButton.Right); Pump();
+            Check(choice.SelectedIndex == index + 1, "Right cycles a dropdown");
+            window.HandleGamepad(GamepadButton.A); Pump();
+            Check(choice.IsDropDownOpen, "A opens a dropdown");
+            window.HandleGamepad(GamepadButton.Down); Pump();
+            Check(choice.SelectedIndex == index + 2, "Down moves within an open dropdown");
+            window.HandleGamepad(GamepadButton.B); Pump();
+            Check(!choice.IsDropDownOpen && choice.SelectedIndex == index + 1 && choice.IsKeyboardFocused, "B closes a dropdown and keeps the earlier choice");
+
+            var password = controls.OfType<PasswordBox>().Single();
+            password.Focus(); Pump();
+            window.HandleGamepad(GamepadButton.A); Pump();
+            var keyboard = Descendants(layers).OfType<OnScreenKeyboard>().SingleOrDefault();
+            Check(keyboard is not null, "A on a text field opens the on-screen keyboard");
+            for (var i = 0; i < 12; i++) window.HandleGamepad(GamepadButton.X);
+            window.HandleGamepad(GamepadButton.A);                                   // q
+            window.HandleGamepad(GamepadButton.Right); window.HandleGamepad(GamepadButton.A); // w
+            window.HandleGamepad(GamepadButton.Y); window.HandleGamepad(GamepadButton.A);     // W
+            window.HandleGamepad(GamepadButton.Down); window.HandleGamepad(GamepadButton.A);  // s
+            Pump();
+            Check(keyboard!.Text == "qwWs", "The on-screen keyboard types, deletes and shifts");
+            Save(layers, screenshot);
+            window.HandleGamepad(GamepadButton.Start); Pump();
+            Check(password.Password == "qwWs" && !Descendants(layers).OfType<OnScreenKeyboard>().Any(), "Start confirms the typed text");
+            Check(password.IsKeyboardFocused, "Focus returns to the edited field");
+
+            var ask = (Task<int>)typeof(MainWindow).GetMethod("AskAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, ["Test", "Pick one", new[] { "Yes", "No" }])!;
+            Pump();
+            window.HandleGamepad(GamepadButton.Right); window.HandleGamepad(GamepadButton.A); Pump();
+            Check(ask.IsCompleted && ask.Result == 1, "A controller can answer an in-window dialog");
+            Check(!Descendants(layers).OfType<OverlayDialog>().Any(), "The dialog closes after answering");
+
+            window.HandleGamepad(GamepadButton.X); Pump();
+            Check(File.ReadAllText(Path.Combine(game, "SeamlessCoop", "ersc_settings.ini")).Contains("cooppassword = qwWs"), "X saves settings");
+            Console.WriteLine("PASS Controller navigates, edits, types and saves settings");
+        }
+        finally { host.Content = null; host.Close(); }
+    }
+
+    private static void Check(bool condition, string what)
+    {
+        if (!condition) throw new Exception("Controller check failed: " + what);
+    }
+
+    private static void Pump() => Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+
+    private static void Save(FrameworkElement content, string path)
+    {
+        var bitmap = new RenderTargetBitmap((int)content.ActualWidth, (int)content.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(content);
+        var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var file = File.Create(path); encoder.Save(file);
+        Console.WriteLine(path);
     }
 
     private static IEnumerable<DependencyObject> Descendants(DependencyObject root)

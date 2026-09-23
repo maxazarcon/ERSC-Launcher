@@ -37,7 +37,10 @@ public static class GameLocator
         }
     }
 
-    public static IReadOnlyList<string> FindInstalled()
+    public static IReadOnlyList<string> FindInstalled() =>
+        FindSteamRoots().SelectMany(root => FindInSteam(root)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+
+    public static IReadOnlyList<string> FindSteamRoots()
     {
         var roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         try
@@ -47,12 +50,12 @@ public static class GameLocator
                 using (key)
                 {
                     var path = key?.GetValue("SteamPath") as string ?? key?.GetValue("InstallPath") as string;
-                    if (!string.IsNullOrWhiteSpace(path)) roots.Add(path);
+                    if (!string.IsNullOrWhiteSpace(path)) roots.Add(Path.GetFullPath(path));
                 }
             }
         }
         catch { /* Registry discovery is best effort; the browse control remains available. */ }
         roots.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Steam"));
-        return roots.Where(Directory.Exists).SelectMany(root => FindInSteam(root)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        return roots.Where(Directory.Exists).ToArray();
     }
 }

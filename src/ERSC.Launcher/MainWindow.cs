@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Input;
 using System.Windows.Markup;
 using System.Windows.Media;
 using ERSC.Launcher.Core;
@@ -16,12 +17,12 @@ namespace ERSC.Launcher;
 public sealed class MainWindow : Window
 {
     private const string LauncherRepository = "maxazarcon/ERSC-Launcher";
-    private static readonly Brush BackgroundBrush = Color("#141713");
-    private static readonly Brush PanelBrush = Color("#20251F");
-    private static readonly Brush TextBrush = Color("#EEEDE3");
-    private static readonly Brush MutedBrush = Color("#AAB3A3");
-    private static readonly Brush GoldBrush = Color("#D7B66B");
-    private static readonly Brush DividerBrush = Color("#2F362D");
+    internal static readonly Brush BackgroundBrush = Color("#141713");
+    internal static readonly Brush PanelBrush = Color("#20251F");
+    internal static readonly Brush TextBrush = Color("#EEEDE3");
+    internal static readonly Brush MutedBrush = Color("#AAB3A3");
+    internal static readonly Brush GoldBrush = Color("#D7B66B");
+    internal static readonly Brush DividerBrush = Color("#2F362D");
     private static readonly Lazy<Style?> ChoiceStyle = new(() => { try { return (Style)XamlReader.Parse(ChoiceXaml); } catch { return null; } });
     private readonly string _dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ERSC Launcher");
     private readonly StateStore _store;
@@ -36,6 +37,18 @@ public sealed class MainWindow : Window
     private readonly Button _save = new();
     private readonly Button _launch = new();
     private readonly Button _check = new();
+    private readonly Button _steam = new();
+    private readonly Button _quit = new();
+    private readonly StackPanel _hints = new() { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 12, 0, 0), Visibility = Visibility.Collapsed };
+    private readonly Grid _layers = new();
+    private readonly List<Overlay> _overlays = [];
+    private readonly bool _gamepadMode;
+    private readonly FocusRing _focusRing;
+    private Gamepad? _gamepad;
+    private readonly UIElement _main;
+    private ScrollViewer? _scroll;
+    private PasswordBox? _password;
+    private int _comboOriginal = -1;
     private readonly ProgressBar _progress = new() { IsIndeterminate = true, Height = 3, Margin = new Thickness(0, 12, 0, 0), Foreground = GoldBrush, Background = BackgroundBrush, BorderThickness = new Thickness(0), Visibility = Visibility.Collapsed };
     private readonly List<(IniEntry Entry, Func<string> Read)> _editors = [];
     private LauncherState _state;
@@ -49,8 +62,12 @@ public sealed class MainWindow : Window
     private string? _launcherPayload;
     private string? _launcherUpdateTag;
 
-    public MainWindow()
+    public MainWindow() : this(false) { }
+
+    /// <param name="gamepadMode">Full-screen, larger layout for Big Picture mode. The launcher closes after starting the game.</param>
+    public MainWindow(bool gamepadMode)
     {
+        _gamepadMode = gamepadMode;
         _store = new StateStore(_dataDir);
         _state = _store.Load();
         Title = "Seamless Co-Op Launcher";
@@ -58,37 +75,80 @@ public sealed class MainWindow : Window
         Background = BackgroundBrush; Foreground = TextBrush;
         FontFamily = new FontFamily("Segoe UI"); FontSize = 14;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
-        Content = BuildScreen();
-        Loaded += (_, _) => { ShowPreviousUpdateErrors(); _ = InitializeAsync(); _ = CheckLauncherAsync(); };
-        Closed += (_, _) => { _http.Dispose(); CleanupStage(); };
+        // The gold focus ring replaces the default dotted focus rectangle.
+        foreach (var type in new[] { typeof(Button), typeof(CheckBox), typeof(Slider), typeof(TextBox), typeof(PasswordBox), typeof(ComboBox) })
+            Resources.Add(type, new Style(type) { Setters = { new Setter(FocusVisualStyleProperty, null) } });
+        _main = BuildScreen();
+        _layers.Children.Add(_main);
+        _focusRing = new FocusRing(_layers);
+        if (gamepadMode)
+        {
+            WindowStyle = WindowStyle.None; WindowState = WindowState.Maximized; ResizeMode = ResizeMode.NoResize;
+            _layers.LayoutTransform = new ScaleTransform(1.25, 1.25);
+        }
+        Content = _layers;
+        Loaded += async (_, _) =>
+        {
+            _gamepad = new Gamepad(Dispatcher);
+            _gamepad.Pressed += HandleGamepad;
+            _gamepad.ConnectionChanged += _ => UpdateHints();
+            _gamepad.Scrolled += axis => _scroll?.ScrollToVerticalOffset(_scroll.VerticalOffset - axis * 24);
+            await ShowPreviousUpdateErrorsAsync();
+            _ = CheckLauncherAsync();
+            await InitializeAsync();
+            if (!_gamepadMode) return;
+            if (!_main.IsKeyboardFocusWithin && _overlays.Count == 0) FocusPreferred();
+            _focusRing.Show();
+        };
+        Activated += (_, _) => { if (_gamepad is not null) _gamepad.Enabled = true; };
+        Deactivated += (_, _) => { if (_gamepad is not null) _gamepad.Enabled = false; };
+        Closed += (_, _) => { _gamepad?.Dispose(); _http.Dispose(); CleanupStage(); };
     }
 
     private UIElement BuildScreen()
     {
-        var root = new DockPanel { Margin = new Thickness(28, 24, 28, 20) };
+        // Rows rather than a DockPanel so Tab and controller order run from the top of the page down to the footer.
+        var root = new Grid { Margin = new Thickness(28, 24, 28, 20), MaxWidth = _gamepadMode ? 1100 : double.PositiveInfinity };
+        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-        // Footer: quiet launcher-update status on the left, primary actions on the right.
-        var footer = new DockPanel();
-        var footerBar = new Border { BorderBrush = DividerBrush, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(0, 16, 0, 0), Margin = new Thickness(0, 16, 0, 0), Child = footer };
-        DockPanel.SetDock(footerBar, Dock.Bottom); root.Children.Add(footerBar);
+        var scroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Focusable = false, IsTabStop = false };
+        _scroll = scroll;
+        root.Children.Add(scroll);
+        var body = new StackPanel { Margin = new Thickness(0, 0, 12, 0) }; scroll.Content = body;
+
+        // Footer: quiet launcher-update status on the left, primary actions on the right, controller hints below.
+        var footerStack = new StackPanel();
+        var footerBar = new Border { BorderBrush = DividerBrush, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(0, 16, 0, 0), Margin = new Thickness(0, 16, 0, 0), Child = footerStack };
+        Grid.SetRow(footerBar, 1); root.Children.Add(footerBar);
+        var footer = new DockPanel(); footerStack.Children.Add(footer);
+        _restartUpdate.Content = "Restart to update"; StyleButton(_restartUpdate); _restartUpdate.Margin = new Thickness(0, 0, 10, 0);
+        _restartUpdate.Visibility = Visibility.Collapsed; _restartUpdate.Click += async (_, _) => await RestartForLauncherUpdateAsync();
+        DockPanel.SetDock(_restartUpdate, Dock.Left); footer.Children.Add(_restartUpdate);
         var actions = new StackPanel { Orientation = Orientation.Horizontal };
         DockPanel.SetDock(actions, Dock.Right); footer.Children.Add(actions);
+        _quit.Content = "Quit"; _quit.Click += (_, _) => Close();
         _save.Content = "Save settings"; _save.Click += (_, _) => SaveSettings();
         _launch.Content = "Launch Seamless Co-Op"; _launch.Click += (_, _) => Launch();
-        StyleButton(_save); StyleButton(_launch, primary: true);
-        _save.Margin = new Thickness(12, 0, 0, 0); _launch.Margin = new Thickness(8, 0, 0, 0);
-        actions.Children.Add(_save); actions.Children.Add(_launch);
-        _restartUpdate.Content = "Restart to update"; StyleButton(_restartUpdate); _restartUpdate.Margin = new Thickness(0, 0, 10, 0);
-        _restartUpdate.Visibility = Visibility.Collapsed; _restartUpdate.Click += (_, _) => RestartForLauncherUpdate();
-        DockPanel.SetDock(_restartUpdate, Dock.Left); footer.Children.Add(_restartUpdate);
+        StyleButton(_quit); StyleButton(_save); StyleButton(_launch, primary: true);
+        _quit.Margin = new Thickness(12, 0, 0, 0); _save.Margin = new Thickness(8, 0, 0, 0); _launch.Margin = new Thickness(8, 0, 0, 0);
+        _quit.Visibility = _gamepadMode ? Visibility.Visible : Visibility.Collapsed; // Full screen has no title bar to close from.
+        actions.Children.Add(_quit); actions.Children.Add(_save); actions.Children.Add(_launch);
         _launcherUpdateStatus.Foreground = MutedBrush; _launcherUpdateStatus.FontSize = 12; _launcherUpdateStatus.VerticalAlignment = VerticalAlignment.Center;
         _launcherUpdateStatus.TextWrapping = TextWrapping.NoWrap; _launcherUpdateStatus.TextTrimming = TextTrimming.CharacterEllipsis;
         _launcherUpdateStatus.SetBinding(ToolTipProperty, new Binding(nameof(TextBlock.Text)) { RelativeSource = RelativeSource.Self });
         footer.Children.Add(_launcherUpdateStatus);
-
-        var scroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
-        root.Children.Add(scroll);
-        var body = new StackPanel { Margin = new Thickness(0, 0, 12, 0) }; scroll.Content = body;
+        foreach (var (glyph, action) in new[] { ("A", "Select"), ("B", "Back"), ("X", "Save"), ("Y", "Check updates"), ("☰", "Launch"), ("⧉", "Quit") })
+        {
+            _hints.Children.Add(new Border
+            {
+                Width = 22, Height = 22, CornerRadius = new CornerRadius(11), BorderBrush = GoldBrush, BorderThickness = new Thickness(1.5), Margin = new Thickness(0, 0, 6, 0),
+                Child = new TextBlock { Text = glyph, FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = GoldBrush, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }
+            });
+            _hints.Children.Add(new TextBlock { Text = action, FontSize = 12, Foreground = MutedBrush, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 18, 0) });
+        }
+        footerStack.Children.Add(_hints);
+        UpdateHints();
         body.Children.Add(Label("SEAMLESS CO-OP", 12, GoldBrush, new Thickness(0, 0, 0, 4)));
         var heading = Label("Your way into the Lands Between", 26, TextBrush, new Thickness(0, 0, 0, 20)); heading.FontWeight = FontWeights.SemiBold;
         body.Children.Add(heading);
@@ -100,6 +160,10 @@ public sealed class MainWindow : Window
         location.Children.Add(locateRow);
         var browse = new Button { Content = "Choose folder" }; StyleButton(browse); browse.Click += async (_, _) => await BrowseAsync(); locateRow.Children.Add(browse);
         _check.Content = "Check updates"; StyleButton(_check); _check.Margin = new Thickness(8, 0, 0, 0); _check.Click += async (_, _) => await CheckAsync(); locateRow.Children.Add(_check);
+        StyleButton(_steam); _steam.Margin = new Thickness(8, 0, 0, 0); _steam.Click += async (_, _) => await AddToSteamAsync(); locateRow.Children.Add(_steam);
+        // Already inside Steam (or full screen from it): the shortcut exists, and closing Steam would end this session.
+        if (_gamepadMode || SteamIntegration.LaunchedBySteam) _steam.Visibility = Visibility.Collapsed;
+        else UpdateSteamButton();
 
         var state = Panel(); var stateCard = Wrap(state); stateCard.Margin = new Thickness(0, 12, 0, 0); body.Children.Add(stateCard);
         state.Children.Add(Heading("Installation"));
@@ -142,32 +206,28 @@ public sealed class MainWindow : Window
         }
     }
 
-    private void ShowPreviousUpdateErrors()
+    private async Task ShowPreviousUpdateErrorsAsync()
     {
         var updates = Path.Combine(_dataDir, "launcher-updates");
         if (!Directory.Exists(updates)) return;
         foreach (var folder in Directory.EnumerateDirectories(updates))
         {
-            try
-            {
-                var message = LauncherUpdateErrors.Take(folder);
-                if (message is not null)
-                {
-                    _launcherUpdateStatus.Text = message;
-                    MessageBox.Show(this, message, "Launcher update failed", MessageBoxButton.OK, MessageBoxImage.Error);
-                }
-            }
+            string? message = null;
+            try { message = LauncherUpdateErrors.Take(folder); }
             catch { }
+            if (message is null) continue;
+            _launcherUpdateStatus.Text = message;
+            await AlertAsync("Launcher update failed", message);
         }
     }
 
-    private void RestartForLauncherUpdate()
+    private async Task RestartForLauncherUpdateAsync()
     {
         if (_launcherPayload is null || _launcherUpdateTag is null) return;
         if (_ini is not null && _editors.Any(e => e.Read() != e.Entry.Value))
         {
-            var choice = MessageBox.Show(this, "Save changed mod settings before restarting?", "Launcher update", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
-            if (choice == MessageBoxResult.Cancel || (choice == MessageBoxResult.Yes && !SaveSettings())) return;
+            var choice = await AskAsync("Launcher update", "Save changed mod settings before restarting?", ["Save", "Don't save", "Cancel"]);
+            if (choice == 2 || (choice == 0 && !SaveSettings())) return;
         }
         try
         {
@@ -186,7 +246,7 @@ public sealed class MainWindow : Window
         catch (Exception ex)
         {
             _launcherUpdateStatus.Text = $"Could not start update: {ex.Message}";
-            MessageBox.Show(this, ex.Message, "Could not update launcher", MessageBoxButton.OK, MessageBoxImage.Error);
+            await AlertAsync("Could not update launcher", ex.Message);
         }
     }
 
@@ -206,7 +266,7 @@ public sealed class MainWindow : Window
         var dialog = new OpenFolderDialog { Title = "Choose the Elden Ring Game folder" };
         if (dialog.ShowDialog(this) != true) return;
         var game = GameLocator.Validate(dialog.FolderName);
-        if (game is null) { MessageBox.Show(this, "Choose the folder containing eldenring.exe, or its parent ELDEN RING folder.", "Invalid game folder"); return; }
+        if (game is null) { await AlertAsync("Invalid game folder", "Choose the folder containing eldenring.exe, or its parent ELDEN RING folder."); return; }
         await SetGameAsync(game);
     }
 
@@ -277,9 +337,9 @@ public sealed class MainWindow : Window
     {
         if (_game is null || _release is null || _busy || _current) return;
         var existing = ModFingerprint.IsInstalled(_game);
-        if (existing && MessageBox.Show(this, "Install " + _release.Tag + "? Existing mod files and settings will be backed up before replacement.", "Update Seamless Co-Op", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        if (existing && await AskAsync("Update Seamless Co-Op", "Install " + _release.Tag + "? Existing mod files and settings will be backed up before replacement.", ["Install", "Cancel"]) != 0) return;
         if (Process.GetProcessesByName("eldenring").Length > 0 || Process.GetProcessesByName("ersc_launcher").Length > 0)
-        { MessageBox.Show(this, "Close Elden Ring before installing or updating the mod.", "Game is running"); return; }
+        { await AlertAsync("Game is running", "Close Elden Ring before installing or updating the mod."); return; }
         _busy = true; UpdateButtons(); SetStatus(existing ? "Updating Seamless Co-Op…" : "Installing Seamless Co-Op…");
         try
         {
@@ -291,13 +351,13 @@ public sealed class MainWindow : Window
             _current = true;
             SetStatus("Installed " + _release.Tag + ". Backup: " + backup);
         }
-        catch (Exception ex) { SetStatus("Install failed: " + ex.Message); MessageBox.Show(this, ex.Message, "Install failed", MessageBoxButton.OK, MessageBoxImage.Error); }
+        catch (Exception ex) { SetStatus("Install failed: " + ex.Message); await AlertAsync("Install failed", ex.Message); }
         finally { CleanupStage(); _busy = false; UpdateButtons(); }
     }
 
     private void LoadSettings()
     {
-        _settings.Children.Clear(); _editors.Clear(); _ini = null;
+        _settings.Children.Clear(); _editors.Clear(); _ini = null; _password = null;
         if (_game is null || !ModFingerprint.IsInstalled(_game)) { _settings.Children.Add(Label("Install the mod to edit its settings.", 14, MutedBrush, new Thickness(0))); return; }
         try
         {
@@ -331,7 +391,7 @@ public sealed class MainWindow : Window
         {
             case SettingKind.Toggle:
             {
-                var toggle = new CheckBox { IsChecked = entry.Value == "1", Content = entry.Value == "1" ? "On" : "Off", Foreground = TextBrush, Cursor = System.Windows.Input.Cursors.Hand };
+                var toggle = new CheckBox { IsChecked = entry.Value == "1", Content = entry.Value == "1" ? "On" : "Off", Foreground = TextBrush, Cursor = Cursors.Hand };
                 StyleToggle(toggle);
                 AutomationProperties.SetName(toggle, presentation.Label);
                 toggle.Checked += (_, _) => toggle.Content = "On";
@@ -352,19 +412,17 @@ public sealed class MainWindow : Window
             }
             case SettingKind.Slider:
             {
-                var row = new DockPanel { LastChildFill = true };
+                // Slider first so focus reaches it before the exact-value field.
+                var row = new Grid();
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
                 var numeric = new TextBox
                 {
                     Text = entry.Value, Width = 66, TextAlignment = TextAlignment.Right, Margin = new Thickness(12, 0, 0, 0),
                     Background = BackgroundBrush, Foreground = TextBrush, BorderBrush = MutedBrush, Padding = new Thickness(5)
                 };
                 AutomationProperties.SetName(numeric, presentation.Label + " exact value");
-                if (presentation.Unit is not null)
-                {
-                    var unit = Label(presentation.Unit, 14, MutedBrush, new Thickness(5, 5, 0, 0));
-                    DockPanel.SetDock(unit, Dock.Right); row.Children.Add(unit);
-                }
-                DockPanel.SetDock(numeric, Dock.Right); row.Children.Add(numeric);
                 var slider = new Slider
                 {
                     Minimum = presentation.Minimum, Maximum = presentation.Maximum,
@@ -374,6 +432,12 @@ public sealed class MainWindow : Window
                 };
                 AutomationProperties.SetName(slider, presentation.Label);
                 row.Children.Add(slider);
+                Grid.SetColumn(numeric, 1); row.Children.Add(numeric);
+                if (presentation.Unit is not null)
+                {
+                    var unit = Label(presentation.Unit, 14, MutedBrush, new Thickness(5, 5, 0, 0));
+                    Grid.SetColumn(unit, 2); row.Children.Add(unit);
+                }
                 var syncing = false;
                 slider.ValueChanged += (_, _) =>
                 {
@@ -401,6 +465,7 @@ public sealed class MainWindow : Window
                 var password = new PasswordBox { Password = entry.Value, MaxWidth = 420, HorizontalAlignment = HorizontalAlignment.Left, MinWidth = 280, Background = BackgroundBrush, Foreground = TextBrush, BorderBrush = MutedBrush, Padding = new Thickness(8, 5, 8, 5) };
                 AutomationProperties.SetName(password, presentation.Label);
                 password.PasswordChanged += (_, _) => UpdateButtons();
+                _password = password;
                 return (password, () => password.Password);
             }
             default:
@@ -421,7 +486,7 @@ public sealed class MainWindow : Window
             _ini.Save(Path.Combine(_game, "SeamlessCoop", "ersc_settings.ini"));
             SetStatus("Settings saved."); UpdateButtons(); return true;
         }
-        catch (Exception ex) { MessageBox.Show(this, ex.Message, "Could not save settings", MessageBoxButton.OK, MessageBoxImage.Error); return false; }
+        catch (Exception ex) { _ = AlertAsync("Could not save settings", ex.Message); return false; }
     }
 
     private void Launch()
@@ -432,8 +497,127 @@ public sealed class MainWindow : Window
             if (!SaveSettings()) return;
             Process.Start(new ProcessStartInfo(Path.Combine(_game, "ersc_launcher.exe")) { WorkingDirectory = _game, UseShellExecute = true });
             SetStatus("Starting Seamless Co-Op…");
+            if (_gamepadMode) Close(); // Hand control back to Steam so Elden Ring gets its own controller layout.
         }
-        catch (Exception ex) { MessageBox.Show(this, ex.Message, "Could not launch", MessageBoxButton.OK, MessageBoxImage.Error); }
+        catch (Exception ex) { _ = AlertAsync("Could not launch", ex.Message); }
+    }
+
+    private async Task AddToSteamAsync()
+    {
+        _steam.IsEnabled = false;
+        try
+        {
+            var message = await SteamIntegration.ChangeAsync(add: true, async question => await AskAsync("Add to Steam", question, ["Close Steam", "Cancel"]) == 0);
+            await AlertAsync("Add to Steam", message);
+        }
+        catch (Exception ex) { await AlertAsync("Could not add to Steam", ex.Message); }
+        finally { UpdateSteamButton(); }
+    }
+
+    private void UpdateSteamButton()
+    {
+        var added = SteamIntegration.IsAdded();
+        _steam.Content = added ? "Added to Steam" : "Add to Steam";
+        _steam.IsEnabled = !added;
+    }
+
+    private void UpdateHints() => _hints.Visibility = _gamepadMode || _gamepad?.Connected == true ? Visibility.Visible : Visibility.Collapsed;
+
+    private Task<int> AskAsync(string title, string message, string[] buttons)
+    {
+        var dialog = new OverlayDialog(title, message, buttons);
+        return ShowOverlayAsync(dialog, dialog.Result);
+    }
+
+    private Task AlertAsync(string title, string message) => AskAsync(title, message, ["OK"]);
+
+    private async Task EditTextAsync(Control field)
+    {
+        var password = field as PasswordBox;
+        var keyboard = new OnScreenKeyboard(AutomationProperties.GetName(field), password?.Password ?? ((TextBox)field).Text, password is not null);
+        var text = await ShowOverlayAsync(keyboard, keyboard.Result);
+        if (text is null) return;
+        if (password is not null) password.Password = text;
+        else ((TextBox)field).Text = text;
+    }
+
+    private async Task<T> ShowOverlayAsync<T>(Overlay overlay, Task<T> result)
+    {
+        var previous = Keyboard.FocusedElement as UIElement;
+        _layers.Children.Add(overlay); _overlays.Add(overlay);
+        _ = Dispatcher.BeginInvoke(overlay.FocusInitial, System.Windows.Threading.DispatcherPriority.Input);
+        try { return await result; }
+        finally
+        {
+            _layers.Children.Remove(overlay); _overlays.Remove(overlay);
+            if (previous is not null && previous.IsVisible && _main.IsAncestorOf(previous)) previous.Focus();
+            else if (_overlays.Count > 0) _overlays[^1].FocusInitial();
+        }
+    }
+
+    /// <summary>Controller input. Overlays take it first; otherwise it moves focus or acts on the focused control.</summary>
+    public void HandleGamepad(GamepadButton button)
+    {
+        _focusRing.Show();
+        if (_overlays.Count > 0) { _overlays[^1].Handle(button); return; }
+        var focused = Keyboard.FocusedElement;
+        if (GamepadNavigator.OpenComboFor(focused) is { } open)
+        {
+            switch (button)
+            {
+                case GamepadButton.Up or GamepadButton.Left: GamepadNavigator.Step(open, -1); break;
+                case GamepadButton.Down or GamepadButton.Right: GamepadNavigator.Step(open, 1); break;
+                case GamepadButton.B:
+                    if (_comboOriginal >= 0) open.SelectedIndex = _comboOriginal;
+                    goto case GamepadButton.A;
+                case GamepadButton.A:
+                    open.IsDropDownOpen = false; _comboOriginal = -1; open.Focus(); break;
+            }
+            return;
+        }
+        var inside = focused is DependencyObject element && _main.IsAncestorOf(element);
+        if (!inside && button is GamepadButton.Up or GamepadButton.Down or GamepadButton.Left or GamepadButton.Right or GamepadButton.A)
+        {
+            FocusPreferred();
+            return;
+        }
+        switch (button)
+        {
+            case GamepadButton.Up: GamepadNavigator.Move(false); break;
+            case GamepadButton.Down: GamepadNavigator.Move(true); break;
+            case GamepadButton.Left or GamepadButton.Right:
+                var direction = button == GamepadButton.Left ? -1 : 1;
+                if (!GamepadNavigator.Adjust(focused, direction, large: false)) GamepadNavigator.Move(direction > 0);
+                break;
+            case GamepadButton.LeftShoulder: GamepadNavigator.Adjust(focused, -1, large: true); break;
+            case GamepadButton.RightShoulder: GamepadNavigator.Adjust(focused, 1, large: true); break;
+            case GamepadButton.A:
+                if (focused is TextBox or PasswordBox) _ = EditTextAsync((Control)focused);
+                else
+                {
+                    if (focused is ComboBox combo) _comboOriginal = combo.SelectedIndex;
+                    GamepadNavigator.Activate(focused);
+                }
+                break;
+            case GamepadButton.X: if (_save.IsEnabled) SaveSettings(); break;
+            case GamepadButton.Y: if (_check.IsEnabled) _ = CheckAsync(); break;
+            case GamepadButton.Start: if (_launch.IsEnabled) Launch(); break;
+            case GamepadButton.Back: _ = ConfirmQuitAsync(); break;
+        }
+    }
+
+    private async Task ConfirmQuitAsync()
+    {
+        if (await AskAsync("Quit", "Close the launcher?", ["Quit", "Cancel"]) == 0) Close();
+    }
+
+    /// <summary>Puts focus on the next thing to do: enter a password, install, or launch.</summary>
+    private void FocusPreferred()
+    {
+        if (_password is { IsVisible: true } password && string.IsNullOrWhiteSpace(password.Password)) password.Focus();
+        else if (_launch.IsEnabled) _launch.Focus();
+        else if (_install.IsEnabled && _install.IsVisible) _install.Focus();
+        else _main.MoveFocus(new TraversalRequest(FocusNavigationDirection.First));
     }
 
     private bool CanLaunch() => _game is not null && ModFingerprint.IsInstalled(_game) &&
@@ -457,7 +641,7 @@ public sealed class MainWindow : Window
     }
     private static string SafeFolderName(string path) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(path)))[..16];
     private static Brush Color(string hex) => (Brush)new BrushConverter().ConvertFromString(hex)!;
-    private static TextBlock Label(string text, double size, Brush color, Thickness margin) => new() { Text = text, FontSize = size, Foreground = color, Margin = margin, TextWrapping = TextWrapping.Wrap };
+    internal static TextBlock Label(string text, double size, Brush color, Thickness margin) => new() { Text = text, FontSize = size, Foreground = color, Margin = margin, TextWrapping = TextWrapping.Wrap };
     private static StackPanel Panel() => new() { Orientation = Orientation.Vertical };
     private static Border Wrap(StackPanel panel) => new() { Background = PanelBrush, Padding = new Thickness(16), Child = panel, CornerRadius = new CornerRadius(6) };
     // Dark dropdown matching the text fields. The stock theme ignores Background on the closed face, so it needs its own template.
@@ -467,6 +651,7 @@ public sealed class MainWindow : Window
           <Setter Property="Foreground" Value="#EEEDE3"/>
           <Setter Property="BorderBrush" Value="#AAB3A3"/>
           <Setter Property="Cursor" Value="Hand"/>
+          <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
           <Setter Property="SnapsToDevicePixels" Value="True"/>
           <Setter Property="ItemContainerStyle">
             <Setter.Value>
@@ -545,10 +730,10 @@ public sealed class MainWindow : Window
         return heading;
     }
 
-    private static void StyleButton(Button button, bool primary = false)
+    internal static void StyleButton(Button button, bool primary = false)
     {
         button.Background = primary ? GoldBrush : PanelBrush; button.Foreground = primary ? BackgroundBrush : TextBrush; button.BorderBrush = GoldBrush;
-        button.BorderThickness = new Thickness(1); button.Padding = new Thickness(14, 8, 14, 8); button.Cursor = System.Windows.Input.Cursors.Hand;
+        button.BorderThickness = new Thickness(1); button.Padding = new Thickness(14, 8, 14, 8); button.Cursor = Cursors.Hand;
         if (primary) button.FontWeight = FontWeights.SemiBold;
         var border = new FrameworkElementFactory(typeof(Border));
         border.Name = "Chrome";

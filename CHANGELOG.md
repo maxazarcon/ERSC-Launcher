@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.0 — 2026-09-23
+
+- Add a per-user Windows installer with a Start Menu entry, optional desktop shortcut, and uninstaller. The portable EXE is still published.
+- Add the launcher to Steam as a non-Steam game from the installer or the new **Add to Steam** button, closing and reopening Steam when needed.
+- Add controller support: move through every setting, change switches, sliders and dropdowns, type with an on-screen keyboard, save, and launch.
+- Open full screen with a larger layout in Big Picture mode, on Steam Deck, or with `--gamepad`, and close after starting the game.
+- Show confirmations and errors inside the launcher window so they work with a controller.
+- Add an app icon.
+
 ## 1.3.0 — 2026-09-23
 
 - Move launcher update status into a slim footer so the game folder and installation come first.
