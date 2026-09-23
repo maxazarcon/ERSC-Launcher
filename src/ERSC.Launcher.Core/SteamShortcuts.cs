@@ -127,7 +127,9 @@ public static class BinaryVdf
 // Steam rewrites that file when it exits, so callers must make sure Steam is closed first.
 public static class SteamShortcuts
 {
-    public const string AppName = "Seamless Co-Op Launcher";
+    public const string AppName = "Seamless Co-Op Launcher (Unofficial)";
+    // Earlier names. Steam keys artwork by an ID made from the name, so a rename has to carry the art across.
+    private static readonly string[] LegacyAppNames = ["Seamless Co-Op Launcher"];
     private const string BackupSuffix = ".ersc-backup";
 
     public static uint AppId(string quotedExe, string appName)
@@ -157,6 +159,13 @@ public static class SteamShortcuts
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { return false; }
     });
 
+    /// <summary>True when the launcher's shortcut still has an earlier name, so adding it again would rename it.</summary>
+    public static bool HasLegacyName(string steamRoot, string exe) => ShortcutFiles(steamRoot).Any(file =>
+    {
+        try { return File.Exists(file) && Shortcuts(Load(file)).Children.Any(s => Matches(s, exe) && s.GetString("AppName") is { } name && LegacyAppNames.Contains(name)); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException) { return false; }
+    });
+
     /// <summary>Adds or refreshes the launcher entry for every Steam user. Returns the number of users updated.</summary>
     public static int Add(string steamRoot, string exe)
     {
@@ -174,6 +183,7 @@ public static class SteamShortcuts
             }
             Fill(entry, exe);
             Save(file, root);
+            MoveLegacyArtwork(file, exe);
             AddArtwork(file, exe);
             count++;
         }
@@ -203,8 +213,27 @@ public static class SteamShortcuts
         [("p", "portrait.png"), ("", "wide.png"), ("_hero", "hero.png"), ("_logo", "logo.png")];
     private static readonly string[] ArtworkExtensions = [".png", ".jpg", ".jpeg"];
 
-    public static string ArtworkPath(string shortcutFile, string exe, string suffix) =>
-        Path.Combine(Path.GetDirectoryName(shortcutFile)!, "grid", $"{AppId(Quote(Path.GetFullPath(exe)), AppName)}{suffix}.png");
+    public static string ArtworkPath(string shortcutFile, string exe, string suffix, string appName = AppName) =>
+        Path.Combine(Path.GetDirectoryName(shortcutFile)!, "grid", $"{AppId(Quote(Path.GetFullPath(exe)), appName)}{suffix}.png");
+
+    // After a rename, art the player chose moves to the new ID; the launcher's own old images are deleted and redrawn by AddArtwork.
+    private static void MoveLegacyArtwork(string shortcutFile, string exe)
+    {
+        foreach (var legacy in LegacyAppNames)
+            foreach (var (suffix, resource) in Artwork)
+                foreach (var ext in ArtworkExtensions)
+                {
+                    try
+                    {
+                        var old = Path.ChangeExtension(ArtworkPath(shortcutFile, exe, suffix, legacy), ext);
+                        if (!File.Exists(old)) continue;
+                        if (File.ReadAllBytes(old).AsSpan().SequenceEqual(ArtworkBytes(resource))) { File.Delete(old); continue; }
+                        var target = ArtworkPath(shortcutFile, exe, suffix);
+                        if (!ArtworkExtensions.Any(e => File.Exists(Path.ChangeExtension(target, e)))) File.Move(old, Path.ChangeExtension(target, ext));
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                }
+    }
 
     // Artwork is cosmetic, so a failure here never undoes the shortcut itself.
     private static void AddArtwork(string shortcutFile, string exe)
@@ -226,11 +255,12 @@ public static class SteamShortcuts
     // Deletes only the launcher's own images, so custom art survives a remove and re-add.
     private static void RemoveArtwork(string shortcutFile, string exe)
     {
+        foreach (var name in LegacyAppNames.Prepend(AppName))
         foreach (var (suffix, resource) in Artwork)
         {
             try
             {
-                var target = ArtworkPath(shortcutFile, exe, suffix);
+                var target = ArtworkPath(shortcutFile, exe, suffix, name);
                 if (File.Exists(target) && File.ReadAllBytes(target).AsSpan().SequenceEqual(ArtworkBytes(resource))) File.Delete(target);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }

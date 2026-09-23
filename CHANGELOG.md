@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.7.0 — 2026-09-23
+
+- The launcher no longer downloads Seamless Co-Op. Select **Get latest release** (or **Nexus page**) to download the ZIP yourself, then **Install from ZIP…**. The mod's author does not allow redistribution, so the mod now always comes from the author's own pages.
+- A ZIP is checked against the SHA-256 digest GitHub publishes for each release. A ZIP that matches no recent release can still be installed after a warning.
+- When the latest release ZIP is already in your Downloads folder, the launcher finds it and offers to install it, which works with a controller.
+- Say clearly that the launcher is unofficial. The app, installer and Steam shortcut are now named "Seamless Co-Op Launcher (Unofficial)". **Update Steam shortcut** renames an existing shortcut and keeps its launch options and custom art.
+
 ## 1.6.0 — 2026-09-23
 
 - Give the Steam shortcut its own library artwork: a portrait cover, wide cover, banner and logo. Art you set yourself in Steam is kept, and removing the shortcut only deletes the launcher's own images.

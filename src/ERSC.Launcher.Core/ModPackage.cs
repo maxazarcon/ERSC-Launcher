@@ -5,36 +5,45 @@ namespace ERSC.Launcher.Core;
 
 public static class ModPackage
 {
-    public static async Task DownloadAsync(HttpClient client, ModAsset asset, string destination, CancellationToken cancellationToken = default)
+    public const long MaxZipSize = 256_000_000;
+
+    /// <summary>Finds the published release a ZIP the player downloaded came from, by its SHA-256 digest. Null when none match.</summary>
+    public static ModRelease? Identify(string zipPath, IEnumerable<ModRelease> releases)
     {
-        if (asset.Size <= 0 || asset.Size > 256_000_000) throw new InvalidDataException("Release ZIP size is invalid.");
-        using var response = await client.GetAsync(asset.Url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        response.EnsureSuccessStatusCode();
-        if (response.Content.Headers.ContentLength is long length && length != asset.Size) throw new InvalidDataException("Download size differs from the release metadata.");
-        var temp = destination + ".partial";
+        var length = new FileInfo(zipPath).Length;
+        if (length <= 0 || length > MaxZipSize) throw new InvalidDataException("The ZIP is empty or too large to be a Seamless Co-Op release.");
+        string? hash = null;
+        foreach (var release in releases)
+            foreach (var asset in release.Assets.Where(a => a.Size == length && HasDigest(a)))
+            {
+                hash ??= Sha256(zipPath);
+                if (hash.Equals(asset.Digest![7..], StringComparison.OrdinalIgnoreCase)) return release;
+            }
+        return null;
+    }
+
+    /// <summary>Looks in a folder (normally Downloads) for a ZIP matching the release asset, newest first. Null when there is none.</summary>
+    public static string? FindDownloaded(string folder, ModAsset asset)
+    {
+        if (!HasDigest(asset) || !Directory.Exists(folder)) return null;
         try
         {
-            await using (var file = File.Create(temp))
-            await using (var stream = await response.Content.ReadAsStreamAsync(cancellationToken))
+            foreach (var file in Directory.EnumerateFiles(folder, "*.zip").OrderByDescending(File.GetLastWriteTimeUtc))
             {
-                var buffer = new byte[128 * 1024]; long total = 0; int read;
-                while ((read = await stream.ReadAsync(buffer, cancellationToken)) > 0)
-                {
-                    total += read;
-                    if (total > asset.Size) throw new InvalidDataException("Download exceeds the release size.");
-                    await file.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
-                }
-                if (total != asset.Size) throw new InvalidDataException("Download is incomplete.");
+                try { if (new FileInfo(file).Length == asset.Size && Sha256(file).Equals(asset.Digest![7..], StringComparison.OrdinalIgnoreCase)) return file; }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             }
-            if (!string.IsNullOrWhiteSpace(asset.Digest))
-            {
-                if (!asset.Digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Unsupported release digest.");
-                var actual = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(temp)));
-                if (!actual.Equals(asset.Digest[7..], StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Release digest does not match.");
-            }
-            File.Move(temp, destination, true);
         }
-        finally { if (File.Exists(temp)) File.Delete(temp); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return null;
+    }
+
+    private static bool HasDigest(ModAsset asset) => asset.Digest is { Length: 71 } digest && digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase);
+
+    private static string Sha256(string path)
+    {
+        using var stream = File.OpenRead(path);
+        return Convert.ToHexString(SHA256.HashData(stream));
     }
 
     public static void Extract(string zipPath, string destination)
