@@ -1,0 +1,28 @@
+name: Upstream check
+
+# Confirms the newest Seamless Co-Op release still has a published digest and the layout the launcher installs.
+on:
+  schedule:
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Test against the newest mod release
+        shell: pwsh
+        env:
+          ERSC_LIVE_RELEASE: '1'
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          dotnet restore tests/ERSC.Launcher.Tests/ERSC.Launcher.Tests.csproj --configfile NuGet.Config
+          dotnet run --no-restore --project tests/ERSC.Launcher.Tests/ERSC.Launcher.Tests.csproj -c Release
+          if ($LASTEXITCODE -ne 0) { throw "Tests failed" }
