@@ -187,13 +187,17 @@ static void TestRealArchive()
 static void TestLiveRelease()
 {
     if (Environment.GetEnvironmentVariable("ERSC_LIVE_RELEASE") != "1") { Console.WriteLine("  SKIP: set ERSC_LIVE_RELEASE=1 for network integration"); return; }
+    // A token avoids the shared runner's anonymous API rate limit. It goes to the API only, never the download host.
+    using var api = new HttpClient();
+    if (Environment.GetEnvironmentVariable("GITHUB_TOKEN") is { Length: > 0 } token) api.DefaultRequestHeaders.Authorization = new("Bearer", token);
     using var client = new HttpClient();
-    var release = new GitHubReleases(client).GetNewestAsync().GetAwaiter().GetResult();
+    var release = new GitHubReleases(api).GetNewestAsync().GetAwaiter().GetResult();
     var asset = ReleaseCatalog.SelectZip(release);
+    if (asset.Digest is null) throw new Exception($"Newest release {release.Tag} has no published SHA-256 digest; ZIP verification will warn every player.");
     // Stands in for the player's own browser download from the author's release page.
     var root = Temp(); var zip = Path.Combine(root, asset.Name);
     File.WriteAllBytes(zip, client.GetByteArrayAsync(asset.Url).GetAwaiter().GetResult());
-    Equal(release.Tag, ModPackage.Identify(zip, [release])!.Tag);
+    if (ModPackage.Identify(zip, [release])?.Tag != release.Tag) throw new Exception($"{asset.Name} from {release.Tag} does not match its published digest.");
     var stage = Path.Combine(root, "stage"); ModPackage.Extract(zip, stage);
     True(ModFingerprint.IsInstalled(stage));
     var game = Path.Combine(root, "Game"); Directory.CreateDirectory(game);

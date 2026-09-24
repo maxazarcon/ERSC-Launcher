@@ -69,3 +69,5 @@ The Steam library artwork in `src/ERSC.Launcher.Core/SteamArt` is drawn by `tool
 ## Publish a launcher release
 
 Update the project version and changelog, then push a matching `vX.Y.Z` tag from the repository's default branch. The Windows GitHub Actions workflow runs the tests, publishes the portable EXE and the installer, and creates the GitHub release. Pull requests run the same tests and upload both builds as workflow artifacts. A tag that does not match the project version fails without publishing.
+
+A weekly workflow (**Upstream check** in the Actions tab) downloads the newest Seamless Co-Op release and confirms it still has a published SHA-256 digest and the file layout the launcher installs. GitHub emails you if it fails. Select **Run workflow** there to check right away, for example after the mod updates.
