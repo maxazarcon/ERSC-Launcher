@@ -14,15 +14,15 @@ using Microsoft.Win32;
 
 namespace ERSC.Launcher;
 
-public sealed class MainWindow : Window
+public sealed partial class MainWindow : Window
 {
     private const string LauncherRepository = "maxazarcon/ERSC-Launcher";
-    internal static readonly Brush BackgroundBrush = Color("#141713");
-    internal static readonly Brush PanelBrush = Color("#20251F");
-    internal static readonly Brush TextBrush = Color("#EEEDE3");
-    internal static readonly Brush MutedBrush = Color("#AAB3A3");
-    internal static readonly Brush GoldBrush = Color("#D7B66B");
-    internal static readonly Brush DividerBrush = Color("#2F362D");
+    internal static readonly Brush BackgroundBrush = Color("#101411");
+    internal static readonly Brush PanelBrush = Color("#181C17");
+    internal static readonly Brush TextBrush = Color("#ECE6D8");
+    internal static readonly Brush MutedBrush = Color("#A4AA9B");
+    internal static readonly Brush GoldBrush = Color("#C4AD77");
+    internal static readonly Brush DividerBrush = Color("#343B30");
     private static readonly Lazy<Style?> ChoiceStyle = new(() => { try { return (Style)XamlReader.Parse(ChoiceXaml); } catch { return null; } });
     private readonly string _dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ERSC Launcher");
     private readonly StateStore _store;
@@ -41,7 +41,7 @@ public sealed class MainWindow : Window
     private readonly Button _check = new();
     private readonly Button _steam = new();
     private readonly Button _quit = new();
-    private readonly StackPanel _hints = new() { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 12, 0, 0), Visibility = Visibility.Collapsed };
+    private readonly WrapPanel _hints = new() { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 12, 0, 0), Visibility = Visibility.Collapsed };
     private readonly Grid _layers = new();
     private readonly List<Overlay> _overlays = [];
     private readonly bool _gamepadMode;
@@ -61,6 +61,7 @@ public sealed class MainWindow : Window
     private string? _stage;
     private IniDocument? _ini;
     private bool _busy;
+    private bool _steamBusy;
     private bool _current;
     private string? _launcherPayload;
     private string? _launcherUpdateTag;
@@ -75,7 +76,7 @@ public sealed class MainWindow : Window
         _store = new StateStore(_dataDir);
         _state = _store.Load();
         Title = SteamShortcuts.AppName;
-        Width = 860; Height = 760; MinWidth = 680; MinHeight = 540;
+        Width = 1440; Height = 900; MinWidth = 680; MinHeight = 540;
         Background = BackgroundBrush; Foreground = TextBrush;
         FontFamily = new FontFamily("Segoe UI"); FontSize = 14;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
@@ -88,7 +89,7 @@ public sealed class MainWindow : Window
         if (gamepadMode)
         {
             WindowStyle = WindowStyle.None; WindowState = WindowState.Maximized; ResizeMode = ResizeMode.NoResize;
-            _layers.LayoutTransform = new ScaleTransform(1.25, 1.25);
+            // The companion layout uses controller-sized targets without scaling the desktop shell.
         }
         Content = _layers;
         Loaded += async (_, _) =>
@@ -109,86 +110,7 @@ public sealed class MainWindow : Window
         Closed += (_, _) => { _gamepad?.Dispose(); _http.Dispose(); CleanupStage(); };
     }
 
-    private UIElement BuildScreen()
-    {
-        // Rows rather than a DockPanel so Tab and controller order run from the top of the page down to the footer.
-        var root = new Grid { Margin = new Thickness(28, 24, 28, 20), MaxWidth = _gamepadMode ? 1100 : double.PositiveInfinity };
-        root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-        root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-
-        var scroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Focusable = false, IsTabStop = false };
-        _scroll = scroll;
-        root.Children.Add(scroll);
-        var body = new StackPanel { Margin = new Thickness(0, 0, 12, 0) }; scroll.Content = body;
-
-        // Footer: quiet launcher-update status on the left, primary actions on the right, controller hints below.
-        var footerStack = new StackPanel();
-        var footerBar = new Border { BorderBrush = DividerBrush, BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(0, 16, 0, 0), Margin = new Thickness(0, 16, 0, 0), Child = footerStack };
-        Grid.SetRow(footerBar, 1); root.Children.Add(footerBar);
-        var footer = new DockPanel(); footerStack.Children.Add(footer);
-        _restartUpdate.Content = "Restart to update"; StyleButton(_restartUpdate); _restartUpdate.Margin = new Thickness(0, 0, 10, 0);
-        _restartUpdate.Visibility = Visibility.Collapsed; _restartUpdate.Click += async (_, _) => await RestartForLauncherUpdateAsync();
-        DockPanel.SetDock(_restartUpdate, Dock.Left); footer.Children.Add(_restartUpdate);
-        var actions = new StackPanel { Orientation = Orientation.Horizontal };
-        DockPanel.SetDock(actions, Dock.Right); footer.Children.Add(actions);
-        _quit.Content = "Quit"; _quit.Click += (_, _) => Close();
-        _save.Content = "Save settings"; _save.Click += (_, _) => SaveSettings();
-        _launch.Content = "Launch Seamless Co-Op"; _launch.Click += (_, _) => Launch();
-        StyleButton(_quit); StyleButton(_save); StyleButton(_launch, primary: true);
-        _quit.Margin = new Thickness(12, 0, 0, 0); _save.Margin = new Thickness(8, 0, 0, 0); _launch.Margin = new Thickness(8, 0, 0, 0);
-        actions.Children.Add(_quit); actions.Children.Add(_save); actions.Children.Add(_launch);
-        _launcherUpdateStatus.Foreground = MutedBrush; _launcherUpdateStatus.FontSize = 12; _launcherUpdateStatus.VerticalAlignment = VerticalAlignment.Center;
-        _launcherUpdateStatus.TextWrapping = TextWrapping.NoWrap; _launcherUpdateStatus.TextTrimming = TextTrimming.CharacterEllipsis;
-        _launcherUpdateStatus.SetBinding(ToolTipProperty, new Binding(nameof(TextBlock.Text)) { RelativeSource = RelativeSource.Self });
-        footer.Children.Add(_launcherUpdateStatus);
-        foreach (var (glyph, action) in new[] { ("A", "Select"), ("B", "Back / Quit"), ("X", "Save"), ("Y", "Check updates"), ("RT", "Go to Launch"), ("☰", "Launch"), ("⧉", "Quit") })
-        {
-            _hints.Children.Add(new Border
-            {
-                MinWidth = 22, Height = 22, Padding = new Thickness(4, 0, 4, 0), CornerRadius = new CornerRadius(11), BorderBrush = GoldBrush, BorderThickness = new Thickness(1.5), Margin = new Thickness(0, 0, 6, 0),
-                Child = new TextBlock { Text = glyph, FontSize = 11, FontWeight = FontWeights.SemiBold, Foreground = GoldBrush, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }
-            });
-            _hints.Children.Add(new TextBlock { Text = action, FontSize = 12, Foreground = MutedBrush, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 18, 0) });
-        }
-        footerStack.Children.Add(_hints);
-        UpdateHints();
-        body.Children.Add(Label("SEAMLESS CO-OP · UNOFFICIAL LAUNCHER", 12, GoldBrush, new Thickness(0, 0, 0, 4)));
-        var heading = Label("Your way into the Lands Between", 26, TextBrush, new Thickness(0, 0, 0, 20)); heading.FontWeight = FontWeights.SemiBold;
-        body.Children.Add(heading);
-
-        var location = Panel(); body.Children.Add(Wrap(location));
-        location.Children.Add(Heading("Elden Ring game folder"));
-        _gameText.Foreground = MutedBrush; location.Children.Add(_gameText);
-        var locateRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 14, 0, 0) };
-        location.Children.Add(locateRow);
-        var browse = new Button { Content = "Choose folder" }; StyleButton(browse); browse.Click += async (_, _) => await BrowseAsync(); locateRow.Children.Add(browse);
-        _check.Content = "Check updates"; StyleButton(_check); _check.Margin = new Thickness(8, 0, 0, 0); _check.Click += async (_, _) => await CheckAsync(); locateRow.Children.Add(_check);
-        StyleButton(_steam); _steam.Margin = new Thickness(8, 0, 0, 0); _steam.Click += async (_, _) => await AddToSteamAsync(); locateRow.Children.Add(_steam);
-        // Already inside Steam (or full screen from it): the shortcut exists, and closing Steam would end this session.
-        if (_gamepadMode || SteamIntegration.LaunchedBySteam) _steam.Visibility = Visibility.Collapsed;
-        else UpdateSteamButton();
-
-        var state = Panel(); var stateCard = Wrap(state); stateCard.Margin = new Thickness(0, 12, 0, 0); body.Children.Add(stateCard);
-        state.Children.Add(Heading("Installation"));
-        _status.Foreground = MutedBrush; state.Children.Add(_status);
-        _version.Foreground = MutedBrush; _version.FontSize = 12; _version.Margin = new Thickness(0, 4, 0, 0); state.Children.Add(_version);
-        state.Children.Add(_progress);
-        // The player downloads the mod themselves from the author's pages; the launcher only installs the ZIP they chose.
-        var installRow = new WrapPanel { Margin = new Thickness(0, 14, 0, 0) }; state.Children.Add(installRow);
-        StyleButton(_install); _install.Click += async (_, _) => await InstallFromZipAsync(_found); installRow.Children.Add(_install);
-        _getRelease.Content = "Get latest release"; StyleButton(_getRelease); _getRelease.Margin = new Thickness(8, 0, 0, 0);
-        _getRelease.Click += (_, _) => OpenPage(_modDownloadUrl ?? ReleaseCatalog.NexusUrl); installRow.Children.Add(_getRelease);
-        _nexus.Content = "Nexus page"; StyleButton(_nexus); _nexus.Margin = new Thickness(8, 0, 0, 0);
-        _nexus.Click += (_, _) => OpenPage(ReleaseCatalog.NexusUrl); installRow.Children.Add(_nexus);
-
-        var settingsHeading = Label("Settings", 20, TextBrush, new Thickness(0, 28, 0, 4)); settingsHeading.FontWeight = FontWeights.SemiBold;
-        body.Children.Add(settingsHeading);
-        body.Children.Add(Label("Changes are saved to the mod's settings file in your game folder.", 13, MutedBrush, new Thickness(0, 0, 0, 4)));
-        body.Children.Add(_settings);
-        body.Children.Add(Label("This launcher is unofficial and is not made by or affiliated with the Seamless Co-Op author. It never includes or hosts the mod: get it from the mod's Nexus Mods page or its official GitHub releases.", 12, MutedBrush, new Thickness(0, 28, 0, 0)));
-        UpdateButtons();
-        return root;
-    }
+    private UIElement BuildScreen() => BuildCompanionScreen();
 
     private async Task CheckLauncherAsync()
     {
@@ -272,6 +194,7 @@ public sealed class MainWindow : Window
 
     private async Task BrowseAsync()
     {
+        if (_busy) return;
         var dialog = new OpenFolderDialog { Title = "Choose the Elden Ring Game folder" };
         if (dialog.ShowDialog(this) != true) return;
         var game = GameLocator.Validate(dialog.FolderName);
@@ -281,6 +204,7 @@ public sealed class MainWindow : Window
 
     private async Task SetGameAsync(string? game)
     {
+        _verifiedInstalledTag = null; _modUpdateRequired = false;
         _game = game; _release = null; _found = null; _current = false; CleanupStage();
         _gameText.Text = game ?? "No Steam installation found. Choose the folder containing eldenring.exe.";
         _state.SelectedGame = game; _store.Save(_state);
@@ -293,7 +217,7 @@ public sealed class MainWindow : Window
     {
         if (_game is null || _busy) return;
         _busy = true; UpdateButtons(); SetStatus("Checking published releases…");
-        _modDownloadUrl = ReleaseCatalog.NexusUrl;
+        _modDownloadUrl = ReleaseCatalog.NexusUrl; _modUpdateRequired = false;
         try
         {
             _releases = await new GitHubReleases(_http).GetRecentAsync();
@@ -303,6 +227,7 @@ public sealed class MainWindow : Window
             var installed = ModFingerprint.IsInstalled(_game);
             _state.Installs.TryGetValue(_game, out var record);
             var recorded = installed && record is not null && StateStore.Matches(_game, record);
+            _verifiedInstalledTag = recorded && record!.Tag != StateStore.UnverifiedTag ? record!.Tag : null;
             if (recorded) _current = record!.Tag.Equals(_release.Tag, StringComparison.OrdinalIgnoreCase);
             if (!_current) _found = await Task.Run(() => ModPackage.FindDownloaded(DownloadsFolder(), asset));
             if (installed && !recorded && _found is not null)
@@ -332,6 +257,9 @@ public sealed class MainWindow : Window
                 var behind = ModVersionPolicy.MirrorIsBehind(_release.Tag, minimum);
                 if (behind == true)
                 {
+                    // The mirror can lag even when a player installed a newer Nexus ZIP.
+                    // Only replace Play's Launch action when the installed version is actually known to be old.
+                    _modUpdateRequired = installed && (_current || (_verifiedInstalledTag is not null && ModVersionPolicy.MirrorIsBehind(_verifiedInstalledTag, minimum) == true));
                     _current = false; _found = null;
                     SetStatus($"The author requires v{minimum}. GitHub still lists {_release.Tag}. Get the current ZIP from Nexus, then choose Install from ZIP.");
                     _version.Text += $" · Author minimum: v{minimum}";
@@ -410,6 +338,8 @@ public sealed class MainWindow : Window
             await Task.Run(() => Stage(zip));
             var backup = ModInstaller.Install(_game, _stage!, Path.Combine(_dataDir, "backups", SafeFolderName(_game)));
             _state.Installs[_game] = StateStore.Record(tag, _game, _stage!);
+            _verifiedInstalledTag = release?.Tag;
+            _modUpdateRequired = false;
             _store.Save(_state);
             LoadSettings();
             _current = release is not null && _release is not null && release.Tag.Equals(_release.Tag, StringComparison.OrdinalIgnoreCase);
@@ -441,33 +371,42 @@ public sealed class MainWindow : Window
 
     private void LoadSettings()
     {
-        _settings.Children.Clear(); _editors.Clear(); _ini = null; _password = null;
-        if (_game is null || !ModFingerprint.IsInstalled(_game)) { _settings.Children.Add(Label("Install the mod to edit its settings.", 14, MutedBrush, new Thickness(0))); return; }
+        _saveFeedback.Text = "Changes apply on the next launch.";
+        _settings.Children.Clear(); _editors.Clear(); _settingRows.Clear(); _ini = null; _password = null;
+        if (_game is null || !ModFingerprint.IsInstalled(_game))
+        { _settings.Children.Add(Label("Install the mod to edit its settings.", 14, MutedBrush, new Thickness(0))); RefreshCompanionState(); return; }
         try
         {
             _ini = IniDocument.Load(Path.Combine(_game, "SeamlessCoop", "ersc_settings.ini"));
-            string? section = null;
-            StackPanel? group = null;
-            foreach (var entry in _ini.Entries)
+            foreach (var entry in _ini.Entries.OrderBy(PresentationOrder))
             {
                 var presentation = SettingPresentation.For(entry);
-                if (group is null || section != entry.Section)
-                {
-                    section = entry.Section;
-                    _settings.Children.Add(Label((section.Length == 0 ? "General" : section.Replace('_', ' ')).ToUpperInvariant(), 12, GoldBrush, new Thickness(0, 20, 0, 8)));
-                    group = Panel(); var card = Wrap(group); card.Padding = new Thickness(16, 2, 16, 2); _settings.Children.Add(card);
-                }
-                if (group.Children.Count > 0) group.Children.Add(new Border { Height = 1, Background = DividerBrush });
-                var row = new StackPanel { Margin = new Thickness(0, 12, 0, 14) }; group.Children.Add(row);
-                var name = Label(presentation.Label, 14, TextBrush, new Thickness(0, 0, 0, 4)); name.FontWeight = FontWeights.SemiBold; row.Children.Add(name);
-                if (presentation.Help is not null) row.Children.Add(Label(presentation.Help, 12, MutedBrush, new Thickness(0, 0, 0, 8)));
+                var row = new Grid();
+                row.ColumnDefinitions.Add(new ColumnDefinition()); row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(44) }); row.ColumnDefinitions.Add(new ColumnDefinition());
+                row.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); row.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                var copy = new StackPanel();
+                var name = Label(presentation.Label, 14, TextBrush, new Thickness(0, 0, 0, 3)); name.FontWeight = FontWeights.SemiBold; copy.Children.Add(name);
+                if (presentation.Help is not null) copy.Children.Add(Label(presentation.Help, 12, MutedBrush, new Thickness(0)));
+                row.Children.Add(copy);
                 var (control, read) = CreateEditor(entry, presentation);
-                row.Children.Add(control);
-                _editors.Add((entry, read));
+                var editor = (FrameworkElement)control; editor.MinWidth = 0; editor.MaxWidth = double.PositiveInfinity;
+                editor.HorizontalAlignment = presentation.Kind == SettingKind.Toggle ? HorizontalAlignment.Right : HorizontalAlignment.Stretch;
+                if (editor is ComboBox or TextBox or PasswordBox) editor.Width = double.NaN;
+                editor.MinHeight = 48;
+                row.Children.Add(editor); LayoutSettingRow(row);
+                editor.AddHandler(System.Windows.Controls.Primitives.TextBoxBase.TextChangedEvent, new TextChangedEventHandler((_, _) => SettingsChanged()));
+                if (editor is CheckBox toggle) { toggle.Checked += (_, _) => SettingsChanged(); toggle.Unchecked += (_, _) => SettingsChanged(); }
+                if (editor is ComboBox choice) choice.SelectionChanged += (_, _) => SettingsChanged();
+                if (editor is PasswordBox password) password.PasswordChanged += (_, _) => SettingsChanged();
+                if (editor is Grid grid) foreach (var slider in grid.Children.OfType<Slider>()) slider.ValueChanged += (_, _) => SettingsChanged();
+                _settings.Children.Add(row); _editors.Add((entry, read)); _settingRows.Add((entry, row, CompanionSettings.SectionFor(entry)));
             }
+            SelectSettingsSection(_selectedSection); RefreshCompanionState();
         }
         catch (Exception ex) { _settings.Children.Add(Label("Could not read settings: " + ex.Message, 14, MutedBrush, new Thickness(0))); }
     }
+
+    private void SettingsChanged() { _saveFeedback.Text = "Unsaved changes."; RefreshCompanionState(); }
 
     private (UIElement Control, Func<string> Read) CreateEditor(IniEntry entry, SettingPresentation presentation)
     {
@@ -504,11 +443,12 @@ public sealed class MainWindow : Window
                 var numeric = new TextBox
                 {
                     Text = entry.Value, Width = 66, TextAlignment = TextAlignment.Right, Margin = new Thickness(12, 0, 0, 0),
-                    Background = BackgroundBrush, Foreground = TextBrush, BorderBrush = MutedBrush, Padding = new Thickness(5)
+                    Background = BackgroundBrush, Foreground = TextBrush, BorderBrush = DividerBrush, Padding = new Thickness(12, 10, 12, 10), VerticalContentAlignment = VerticalAlignment.Center
                 };
                 AutomationProperties.SetName(numeric, presentation.Label + " exact value");
                 var slider = new Slider
                 {
+                    Style = CompanionSliderStyle.Value,
                     Minimum = presentation.Minimum, Maximum = presentation.Maximum,
                     Value = int.Parse(entry.Value, CultureInfo.InvariantCulture),
                     TickFrequency = 1, IsSnapToTickEnabled = true,
@@ -546,7 +486,7 @@ public sealed class MainWindow : Window
             }
             case SettingKind.Password:
             {
-                var password = new PasswordBox { Password = entry.Value, MaxWidth = 420, HorizontalAlignment = HorizontalAlignment.Left, MinWidth = 280, Background = BackgroundBrush, Foreground = TextBrush, BorderBrush = MutedBrush, Padding = new Thickness(8, 5, 8, 5) };
+                var password = new PasswordBox { Password = entry.Value, MaxWidth = 420, HorizontalAlignment = HorizontalAlignment.Left, MinWidth = 280, Background = BackgroundBrush, Foreground = TextBrush, BorderBrush = DividerBrush, VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(12, 10, 12, 10) };
                 AutomationProperties.SetName(password, presentation.Label);
                 password.PasswordChanged += (_, _) => UpdateButtons();
                 _password = password;
@@ -554,7 +494,7 @@ public sealed class MainWindow : Window
             }
             default:
             {
-                var input = new TextBox { Text = entry.Value, MaxWidth = 420, HorizontalAlignment = HorizontalAlignment.Left, MinWidth = 280, Background = BackgroundBrush, Foreground = TextBrush, BorderBrush = MutedBrush, Padding = new Thickness(8, 5, 8, 5) };
+                var input = new TextBox { Text = entry.Value, MaxWidth = 420, HorizontalAlignment = HorizontalAlignment.Left, MinWidth = 280, Background = BackgroundBrush, Foreground = TextBrush, BorderBrush = DividerBrush, VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(12, 10, 12, 10) };
                 AutomationProperties.SetName(input, presentation.Label);
                 return (input, () => input.Text);
             }
@@ -568,7 +508,7 @@ public sealed class MainWindow : Window
         {
             foreach (var (entry, read) in _editors) _ini.SetAt(entry.LineIndex, read());
             _ini.Save(Path.Combine(_game, "SeamlessCoop", "ersc_settings.ini"));
-            SetStatus("Settings saved."); UpdateButtons(); return true;
+            SetStatus("Settings saved."); _saveFeedback.Text = "Settings saved."; UpdateButtons(); return true;
         }
         catch (Exception ex) { _ = AlertAsync("Could not save settings", ex.Message); return false; }
     }
@@ -588,14 +528,15 @@ public sealed class MainWindow : Window
 
     private async Task AddToSteamAsync()
     {
-        _steam.IsEnabled = false;
+        if (_busy || _steamBusy) return;
+        _steamBusy = true; _steam.IsEnabled = false;
         try
         {
             var message = await SteamIntegration.ChangeAsync(add: true, async question => await AskAsync("Add to Steam", question, ["Close Steam", "Cancel"]) == 0);
             await AlertAsync("Add to Steam", message);
         }
         catch (Exception ex) { await AlertAsync("Could not add to Steam", ex.Message); }
-        finally { UpdateSteamButton(); }
+        finally { _steamBusy = false; UpdateSteamButton(); }
     }
 
     private void UpdateSteamButton()
@@ -603,7 +544,7 @@ public sealed class MainWindow : Window
         var added = SteamIntegration.IsAdded();
         var rename = added && SteamIntegration.HasLegacyName();
         _steam.Content = rename ? "Update Steam shortcut" : added ? "Added to Steam" : "Add to Steam";
-        _steam.IsEnabled = !added || rename;
+        _steam.IsEnabled = !_busy && !_steamBusy && (!added || rename);
     }
 
     private void UpdateHints()
@@ -707,18 +648,23 @@ public sealed class MainWindow : Window
     /// <summary>Jumps to the Launch button, or to whatever still blocks launching.</summary>
     private void SnapToLaunch()
     {
-        if (_launch.IsEnabled) _launch.Focus();
+        if (_launch.IsEnabled)
+        {
+            if (_modUpdateRequired) { SelectPage("Installation"); _launchInstalled.Focus(); }
+            else { SelectPage("Play"); _launch.Focus(); }
+        }
         else FocusPreferred();
     }
 
-    /// <summary>Puts focus on the next thing to do: enter a password, install, or launch.</summary>
+    /// <summary>Puts focus on the next action, including navigating to its page.</summary>
     private void FocusPreferred()
     {
-        if (_password is { IsVisible: true } password && string.IsNullOrWhiteSpace(password.Password)) password.Focus();
-        else if (_launch.IsEnabled) _launch.Focus();
-        else if (_found is not null && _install.IsEnabled) _install.Focus();
-        else if (_game is not null && !ModFingerprint.IsInstalled(_game) && _getRelease.IsEnabled) _getRelease.Focus();
-        else _main.MoveFocus(new TraversalRequest(FocusNavigationDirection.First));
+        if (_password is { } password && string.IsNullOrWhiteSpace(password.Password))
+        { SelectPage("Co-op settings"); SelectSettingsSection(CompanionSection.Session); password.Focus(); }
+        else if (_launch.IsEnabled) SnapToLaunch();
+        else if (_game is not null && !ModFingerprint.IsInstalled(_game))
+        { SelectPage("Installation"); if (_found is not null && _install.IsEnabled) _install.Focus(); else _getRelease.Focus(); }
+        else { SelectPage("Play"); _heroSetup.Focus(); }
     }
 
     private bool CanLaunch() => _game is not null && ModFingerprint.IsInstalled(_game) &&
@@ -730,9 +676,11 @@ public sealed class MainWindow : Window
         _install.Content = _found is not null ? "Install " + Path.GetFileName(_found) : "Install from ZIP…";
         _save.IsEnabled = !_busy && _ini is not null;
         _launch.IsEnabled = !_busy && CanLaunch();
+        UpdateSteamButton(); _steam.IsEnabled &= !_busy;
         _progress.Visibility = _busy ? Visibility.Visible : Visibility.Collapsed;
+        RefreshCompanionState();
     }
-    private void SetStatus(string message) => _status.Text = message;
+    private void SetStatus(string message) { _status.Text = message; RefreshCompanionState(); }
     private void CleanupStage()
     {
         if (_stage is null) return;
@@ -742,22 +690,22 @@ public sealed class MainWindow : Window
     }
     private static string SafeFolderName(string path) => Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(path)))[..16];
     private static Brush Color(string hex) => (Brush)new BrushConverter().ConvertFromString(hex)!;
-    internal static TextBlock Label(string text, double size, Brush color, Thickness margin) => new() { Text = text, FontSize = size, Foreground = color, Margin = margin, TextWrapping = TextWrapping.Wrap };
+    internal static TextBlock Label(string text, double size, Brush color, Thickness margin) => new() { Text = text, FontSize = size, Foreground = color, Margin = margin, TextWrapping = TextWrapping.Wrap, LineHeight = size * 1.45 };
     private static StackPanel Panel() => new() { Orientation = Orientation.Vertical };
     private static Border Wrap(StackPanel panel) => new() { Background = PanelBrush, Padding = new Thickness(16), Child = panel, CornerRadius = new CornerRadius(6) };
     // Dark dropdown matching the text fields. The stock theme ignores Background on the closed face, so it needs its own template.
     private const string ChoiceXaml = """
         <Style xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" TargetType="ComboBox">
-          <Setter Property="Background" Value="#141713"/>
-          <Setter Property="Foreground" Value="#EEEDE3"/>
-          <Setter Property="BorderBrush" Value="#AAB3A3"/>
+          <Setter Property="Background" Value="#101411"/>
+          <Setter Property="Foreground" Value="#ECE6D8"/>
+          <Setter Property="BorderBrush" Value="#A4AA9B"/>
           <Setter Property="Cursor" Value="Hand"/>
           <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
           <Setter Property="SnapsToDevicePixels" Value="True"/>
           <Setter Property="ItemContainerStyle">
             <Setter.Value>
               <Style TargetType="ComboBoxItem">
-                <Setter Property="Foreground" Value="#EEEDE3"/>
+                <Setter Property="Foreground" Value="#ECE6D8"/>
                 <Setter Property="Template">
                   <Setter.Value>
                     <ControlTemplate TargetType="ComboBoxItem">
@@ -766,11 +714,11 @@ public sealed class MainWindow : Window
                       </Border>
                       <ControlTemplate.Triggers>
                         <Trigger Property="IsSelected" Value="True">
-                          <Setter TargetName="Row" Property="Background" Value="#2F362D"/>
+                          <Setter TargetName="Row" Property="Background" Value="#343B30"/>
                         </Trigger>
                         <Trigger Property="IsHighlighted" Value="True">
-                          <Setter TargetName="Row" Property="Background" Value="#D7B66B"/>
-                          <Setter Property="Foreground" Value="#141713"/>
+                          <Setter TargetName="Row" Property="Background" Value="#C4AD77"/>
+                          <Setter Property="Foreground" Value="#101411"/>
                         </Trigger>
                       </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -788,14 +736,14 @@ public sealed class MainWindow : Window
                     <ToggleButton.Template>
                       <ControlTemplate TargetType="ToggleButton">
                         <Border x:Name="Chrome" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" CornerRadius="3">
-                          <Path HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,12,0" Data="M 0 0 L 4 4 L 8 0" Stroke="#D7B66B" StrokeThickness="1.5"/>
+                          <Path HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,12,0" Data="M 0 0 L 4 4 L 8 0" Stroke="#C4AD77" StrokeThickness="1.5"/>
                         </Border>
                         <ControlTemplate.Triggers>
                           <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Chrome" Property="BorderBrush" Value="#D7B66B"/>
+                            <Setter TargetName="Chrome" Property="BorderBrush" Value="#C4AD77"/>
                           </Trigger>
                           <Trigger Property="IsChecked" Value="True">
-                            <Setter TargetName="Chrome" Property="BorderBrush" Value="#D7B66B"/>
+                            <Setter TargetName="Chrome" Property="BorderBrush" Value="#C4AD77"/>
                           </Trigger>
                         </ControlTemplate.Triggers>
                       </ControlTemplate>
@@ -805,7 +753,7 @@ public sealed class MainWindow : Window
                                     Content="{TemplateBinding SelectionBoxItem}" ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
                                     ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}" ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}"/>
                   <Popup IsOpen="{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}}" Placement="Bottom" AllowsTransparency="True" Focusable="False" PopupAnimation="Fade">
-                    <Border Background="#20251F" BorderBrush="#AAB3A3" BorderThickness="1" CornerRadius="3" Margin="0,2,0,0" Padding="3"
+                    <Border Background="#181C17" BorderBrush="#A4AA9B" BorderThickness="1" CornerRadius="3" Margin="0,2,0,0" Padding="3"
                             MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}" MaxHeight="{TemplateBinding MaxDropDownHeight}">
                       <ScrollViewer>
                         <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"/>
@@ -833,26 +781,26 @@ public sealed class MainWindow : Window
 
     internal static void StyleButton(Button button, bool primary = false)
     {
-        button.Background = primary ? GoldBrush : PanelBrush; button.Foreground = primary ? BackgroundBrush : TextBrush; button.BorderBrush = GoldBrush;
-        button.BorderThickness = new Thickness(1); button.Padding = new Thickness(14, 8, 14, 8); button.Cursor = Cursors.Hand;
+        button.Background = primary ? GoldBrush : PanelBrush; button.Foreground = primary ? BackgroundBrush : TextBrush; button.BorderBrush = primary ? GoldBrush : DividerBrush;
+        button.BorderThickness = new Thickness(1); button.Padding = new Thickness(24, 15, 24, 15); button.MinHeight = 48; button.FontFamily = BodyFont; button.FontWeight = FontWeights.Bold; button.Cursor = Cursors.Hand;
         if (primary) button.FontWeight = FontWeights.SemiBold;
         var border = new FrameworkElementFactory(typeof(Border));
         border.Name = "Chrome";
         border.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Button.BackgroundProperty));
         border.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(Button.BorderBrushProperty));
         border.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(Button.BorderThicknessProperty));
-        border.SetValue(Border.CornerRadiusProperty, new CornerRadius(3));
+        border.SetValue(Border.CornerRadiusProperty, new CornerRadius(2));
         var content = new FrameworkElementFactory(typeof(ContentPresenter));
-        content.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+        content.SetValue(ContentPresenter.HorizontalAlignmentProperty, new TemplateBindingExtension(Button.HorizontalContentAlignmentProperty));
         content.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
         content.SetValue(ContentPresenter.MarginProperty, new TemplateBindingExtension(Button.PaddingProperty));
         border.AppendChild(content);
         var template = new ControlTemplate(typeof(Button)) { VisualTree = border };
         var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
-        hover.Setters.Add(new Setter(Border.BackgroundProperty, Color(primary ? "#E6C986" : "#2C3329"), "Chrome"));
+        hover.Setters.Add(new Setter(Border.BackgroundProperty, Color(primary ? "#D5BE89" : "#2C3329"), "Chrome"));
         template.Triggers.Add(hover);
         var pressed = new Trigger { Property = Button.IsPressedProperty, Value = true };
-        pressed.Setters.Add(new Setter(Border.BackgroundProperty, Color(primary ? "#C09F55" : "#363E33"), "Chrome"));
+        pressed.Setters.Add(new Setter(Border.BackgroundProperty, Color(primary ? "#A58E5C" : "#363E33"), "Chrome"));
         template.Triggers.Add(pressed);
         var disabled = new Trigger { Property = Button.IsEnabledProperty, Value = false };
         disabled.Setters.Add(new Setter(UIElement.OpacityProperty, 0.4));
@@ -862,31 +810,13 @@ public sealed class MainWindow : Window
 
     private static void StyleToggle(CheckBox toggle)
     {
-        var row = new FrameworkElementFactory(typeof(StackPanel));
-        row.SetValue(StackPanel.OrientationProperty, Orientation.Horizontal);
-        var track = new FrameworkElementFactory(typeof(Border));
-        track.Name = "Track";
-        track.SetValue(FrameworkElement.WidthProperty, 44.0);
-        track.SetValue(FrameworkElement.HeightProperty, 24.0);
-        track.SetValue(Border.CornerRadiusProperty, new CornerRadius(12));
-        track.SetValue(Border.BackgroundProperty, MutedBrush);
-        var knob = new FrameworkElementFactory(typeof(System.Windows.Shapes.Ellipse));
-        knob.Name = "Knob";
-        knob.SetValue(FrameworkElement.WidthProperty, 18.0);
-        knob.SetValue(FrameworkElement.HeightProperty, 18.0);
-        knob.SetValue(FrameworkElement.MarginProperty, new Thickness(3));
-        knob.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Left);
-        knob.SetValue(System.Windows.Shapes.Shape.FillProperty, BackgroundBrush);
-        track.AppendChild(knob); row.AppendChild(track);
-        var text = new FrameworkElementFactory(typeof(ContentPresenter));
-        text.SetValue(FrameworkElement.MarginProperty, new Thickness(10, 2, 0, 0));
-        text.SetValue(ContentPresenter.ContentProperty, new TemplateBindingExtension(CheckBox.ContentProperty));
-        row.AppendChild(text);
-        var template = new ControlTemplate(typeof(CheckBox)) { VisualTree = row };
-        var on = new Trigger { Property = CheckBox.IsCheckedProperty, Value = true };
-        on.Setters.Add(new Setter(Border.BackgroundProperty, GoldBrush, "Track"));
-        on.Setters.Add(new Setter(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Right, "Knob"));
-        template.Triggers.Add(on);
-        toggle.Template = template;
+        var grid = new FrameworkElementFactory(typeof(Grid)); grid.SetValue(FrameworkElement.WidthProperty, 54.0); grid.SetValue(FrameworkElement.HeightProperty, 30.0);
+        var off = new FrameworkElementFactory(typeof(Image)); off.Name = "OffImage"; off.SetValue(Image.SourceProperty, Asset("switch-off.png")); grid.AppendChild(off);
+        var on = new FrameworkElementFactory(typeof(Image)); on.Name = "OnImage"; on.SetValue(Image.SourceProperty, Asset("switch-on.png")); on.SetValue(UIElement.VisibilityProperty, Visibility.Collapsed); grid.AppendChild(on);
+        var template = new ControlTemplate(typeof(CheckBox)) { VisualTree = grid };
+        var active = new Trigger { Property = System.Windows.Controls.Primitives.ToggleButton.IsCheckedProperty, Value = true };
+        active.Setters.Add(new Setter(UIElement.VisibilityProperty, Visibility.Collapsed, "OffImage")); active.Setters.Add(new Setter(UIElement.VisibilityProperty, Visibility.Visible, "OnImage")); template.Triggers.Add(active);
+        var disabled = new Trigger { Property = IsEnabledProperty, Value = false }; disabled.Setters.Add(new Setter(OpacityProperty, .4)); template.Triggers.Add(disabled);
+        toggle.Template = template; toggle.Cursor = Cursors.Hand; toggle.MinHeight = 48;
     }
 }

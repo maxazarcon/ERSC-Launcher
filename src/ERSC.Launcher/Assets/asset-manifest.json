@@ -1,0 +1,134 @@
+{
+  "fonts": [
+    {
+      "file": "Manrope-Regular.ttf",
+      "family": "Manrope",
+      "legacy_family": "Manrope",
+      "style": "Regular",
+      "weight": 400
+    },
+    {
+      "file": "Manrope-Medium.ttf",
+      "family": "Manrope",
+      "legacy_family": "Manrope Medium",
+      "style": "Medium",
+      "weight": 500
+    },
+    {
+      "file": "Manrope-SemiBold.ttf",
+      "family": "Manrope",
+      "legacy_family": "Manrope SemiBold",
+      "style": "SemiBold",
+      "weight": 600
+    },
+    {
+      "file": "Manrope-Bold.ttf",
+      "family": "Manrope",
+      "legacy_family": "Manrope",
+      "style": "Bold",
+      "weight": 700
+    },
+    {
+      "file": "CormorantGaramond-Medium.ttf",
+      "family": "Cormorant Garamond",
+      "legacy_family": "Cormorant Garamond Medium",
+      "style": "Medium",
+      "weight": 500
+    },
+    {
+      "file": "Cinzel-Regular.ttf",
+      "family": "Cinzel",
+      "legacy_family": "Cinzel",
+      "style": "Regular",
+      "weight": 400
+    }
+  ],
+  "svg_rasters": [
+    {
+      "source": "close.svg",
+      "viewbox": [
+        16.0,
+        16.0
+      ],
+      "raster": "close.png",
+      "pixels": [
+        32,
+        32
+      ]
+    },
+    {
+      "source": "maximize.svg",
+      "viewbox": [
+        16.0,
+        16.0
+      ],
+      "raster": "maximize.png",
+      "pixels": [
+        32,
+        32
+      ]
+    },
+    {
+      "source": "minimize.svg",
+      "viewbox": [
+        16.0,
+        16.0
+      ],
+      "raster": "minimize.png",
+      "pixels": [
+        32,
+        32
+      ]
+    },
+    {
+      "source": "switch-off.svg",
+      "viewbox": [
+        54.0,
+        30.0
+      ],
+      "raster": "switch-off.png",
+      "pixels": [
+        108,
+        60
+      ]
+    },
+    {
+      "source": "switch-on.svg",
+      "viewbox": [
+        54.0,
+        30.0
+      ],
+      "raster": "switch-on.png",
+      "pixels": [
+        108,
+        60
+      ]
+    }
+  ],
+  "artwork": {
+    "file": "canopy.png",
+    "pixels": [
+      1672,
+      941
+    ],
+    "provenance": "Original image generated with OpenAI Image Gen on 2026-11-02. Figma release frames 31:57 and 31:133 approved by Max before implementation. No official game screenshot is bundled."
+  },
+  "sha256": {
+    "canopy.png": "b3187582cb2a23563e66be73b1fe76fb3fde1a043bdcf7a68c3061a7f7e87466",
+    "close.png": "b2a551d17eae810327e4d254700715e35678c3ef9cdae9866837b3c81c2ac0d9",
+    "maximize.png": "f44857e2925d6b7e01d839be5ea0e39055cd44de3061f9cce7e39080c4dcd3f7",
+    "minimize.png": "a9dc67dfc100c9d1ccafbce4827204a93060ce893dfa25b76b5f52e850e61b93",
+    "switch-off.png": "ea8353d7be8922faebc23e678881d3a7d50c86e82e9942ab5b110b893943b791",
+    "switch-on.png": "75722d266cfc5c6e8801744a8cec5456a675fe9f1cfba2e4c5e3876f861dc8af",
+    "Fonts/Cinzel-OFL.txt": "f2b3029aba64c378bf0963b62945eee15e564fe4330b934c8f2eb058282b5e83",
+    "Fonts/Cinzel-Regular.ttf": "b63f9cca5641611d419b6bb6a703cb2cd05c6ae9f97d9c7821299e9ddab7677a",
+    "Fonts/CormorantGaramond-Medium.ttf": "ee45221f47ef1f932312fd742de6b3460886fc46bbd937a4734bb0eb2e23e6ab",
+    "Fonts/CormorantGaramond-OFL.txt": "60700d351cac4650c51f3f9db318d2a420f8b45052dba2715eb5fec41f0f6956",
+    "Fonts/Manrope-Bold.ttf": "f948ef3e7e65c4aa5e131f67e3015ca521419488afdc9daf3e2cb2f14b6c26ab",
+    "Fonts/Manrope-Medium.ttf": "6ea3a1bca9e2107dafc51c2bf63d53ab36151fc97576f860f30acb5bc6de4c0d",
+    "Fonts/Manrope-OFL.txt": "58172e0c0fac2cda8a37b348164bb55e44b0e69051e557e92b1d3f6910141f7b",
+    "Fonts/Manrope-Regular.ttf": "ff007369bbbdabeb050b544170edcd6f49cdfdb29270d3f615b7ea14c7259bef",
+    "Fonts/Manrope-SemiBold.ttf": "4b18e131b2e1216364369edd217fb59476af064cf80456aae346f8342f43282a"
+  },
+  "restrictions": "Fonts are distributed with their SIL OFL 1.1 licenses. Original landscape replaces the official screenshot reference."
+}

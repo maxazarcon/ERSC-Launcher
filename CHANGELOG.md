@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.8.0 — 2026-11-02
+
+- Implement the approved Elden Ring companion design with Play, Co-op settings and Installation views, embedded fonts and responsive desktop/full-screen layouts.
+- Group all 17 known INI settings into Session, Gameplay, Enemy scaling and Advanced. Keep one edit buffer across navigation; preserve unknown keys, unfamiliar values, comments and exact custom scaling values.
+- Show real installed-file/version evidence and update status on Play. An author-required update replaces the primary Launch action only when the installed version is known to be old; installed-game launch remains available in Installation.
+- Retain installation backups, ZIP verification and confirmation, Steam shortcuts, launcher updates, controller navigation and text entry. Label all on-screen keyboard actions and protect pending Steam/folder operations from overlapping work.
+- Ship the approved original landscape in place of the official screenshot study. No game or mod binaries are included.
+
 ## 1.7.1 — 2026-11-02
 
 - Check the mod author's version policy as well as the GitHub release mirror. When Nexus has a required version ahead of GitHub, explain the mismatch and open Nexus from **Get latest release**.

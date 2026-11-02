@@ -7,6 +7,7 @@ using ERSC.Launcher.Core;
 var tests = new (string Name, Action Run)[]
 {
     ("INI preserves unknown settings and comments", TestIni),
+    ("Companion sections cover current settings and retain unfamiliar values", TestCompanionSections),
     ("Game folder accepts root or Game", TestGamePath),
     ("Steam library discovery finds custom library", TestSteam),
     ("Release selection includes beta and rejects ambiguous ZIPs", TestRelease),
@@ -49,6 +50,21 @@ static void Equal<T>(T expected, T actual)
 static void True(bool value) { if (!value) throw new Exception("Expected true"); }
 static void False(bool value) { if (value) throw new Exception("Expected false"); }
 static string Temp() { var p = Path.Combine(Path.GetTempPath(), "ersc-test-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(p); return p; }
+
+static void TestCompanionSections()
+{
+    var ini = IniDocument.Parse("[GAMEPLAY]\nallow_invaders=1\ndeath_debuffs=0\nallow_summons=1\noverhead_player_display=0\nskip_splash_screens=0\nappend_steam_id_to_players=0\nalways_spectate_on_death=0\ndefault_boot_master_volume=5\n[SCALING]\nenemy_health_scaling=35\nenemy_damage_scaling=0\nenemy_posture_scaling=15\nboss_health_scaling=100\nboss_damage_scaling=0\nboss_posture_scaling=20\n[PASSWORD]\ncooppassword=sample\n[SAVE]\nsave_file_extension=co2\n[LANGUAGE]\nmod_language_override=\n");
+    Equal(17, ini.Entries.Count);
+    Equal(6, ini.Entries.Count(e => CompanionSettings.SectionFor(e) == CompanionSection.Session));
+    Equal(3, ini.Entries.Count(e => CompanionSettings.SectionFor(e) == CompanionSection.Gameplay));
+    Equal(6, ini.Entries.Count(e => CompanionSettings.SectionFor(e) == CompanionSection.Scaling));
+    Equal(2, ini.Entries.Count(e => CompanionSettings.SectionFor(e) == CompanionSection.Advanced));
+    var custom = IniDocument.Parse("[FUTURE]\nfuture_setting=custom\n[GAMEPLAY]\nallow_invaders=custom\noverhead_player_display=99\n[SCALING]\nenemy_health_scaling=custom\n");
+    True(custom.Entries.All(e => CompanionSettings.SectionFor(e) == CompanionSection.Advanced));
+    // Classifying must never normalize or rewrite raw future/custom data.
+    True(custom.Entries.All(e => e.Value is "custom" or "99"));
+}
+
 static void TestIni()
 {
     var ini = IniDocument.Parse("; heading\r\n[password]\r\ncooppassword = old\r\n[other]\r\nnew_setting = 7\r\n");

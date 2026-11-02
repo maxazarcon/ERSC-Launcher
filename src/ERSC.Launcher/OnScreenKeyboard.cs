@@ -155,6 +155,7 @@ public sealed class OnScreenKeyboard : Overlay
                 _keys[r, c].Content = Current(r, c);
                 Highlight(_keys[r, c], r == _row && c == _column);
             }
+        for (var i = 0; i < _actions.Length; i++) _actions[i].Content = Actions[i];
         _actions[0].Content = _shift ? "SHIFT" : "Shift";
         _actions[1].Content = _symbols ? "abc" : "?123";
         for (var i = 0; i < _actions.Length; i++) Highlight(_actions[i], _row == Letters.Length && i == _column / 2);
