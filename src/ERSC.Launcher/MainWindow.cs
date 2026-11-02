@@ -64,6 +64,7 @@ public sealed class MainWindow : Window
     private bool _current;
     private string? _launcherPayload;
     private string? _launcherUpdateTag;
+    private string? _modDownloadUrl;
 
     public MainWindow() : this(false) { }
 
@@ -176,7 +177,7 @@ public sealed class MainWindow : Window
         var installRow = new WrapPanel { Margin = new Thickness(0, 14, 0, 0) }; state.Children.Add(installRow);
         StyleButton(_install); _install.Click += async (_, _) => await InstallFromZipAsync(_found); installRow.Children.Add(_install);
         _getRelease.Content = "Get latest release"; StyleButton(_getRelease); _getRelease.Margin = new Thickness(8, 0, 0, 0);
-        _getRelease.Click += (_, _) => OpenPage(ReleaseCatalog.ReleasePageUrl(_release?.Tag)); installRow.Children.Add(_getRelease);
+        _getRelease.Click += (_, _) => OpenPage(_modDownloadUrl ?? ReleaseCatalog.NexusUrl); installRow.Children.Add(_getRelease);
         _nexus.Content = "Nexus page"; StyleButton(_nexus); _nexus.Margin = new Thickness(8, 0, 0, 0);
         _nexus.Click += (_, _) => OpenPage(ReleaseCatalog.NexusUrl); installRow.Children.Add(_nexus);
 
@@ -292,6 +293,7 @@ public sealed class MainWindow : Window
     {
         if (_game is null || _busy) return;
         _busy = true; UpdateButtons(); SetStatus("Checking published releases…");
+        _modDownloadUrl = ReleaseCatalog.NexusUrl;
         try
         {
             _releases = await new GitHubReleases(_http).GetRecentAsync();
@@ -317,12 +319,40 @@ public sealed class MainWindow : Window
             }
             var next = _found is not null ? $" Found {Path.GetFileName(_found)} in your Downloads folder, ready to install."
                 : $" Select Get latest release, download the {_release.Tag} ZIP, then choose Install from ZIP.";
-            if (_current) SetStatus("Seamless Co-Op is up to date.");
+            if (_current) SetStatus($"Installed files match GitHub {_release.Tag}. Checking the author's version policy…");
             else if (recorded && record!.Tag == StateStore.UnverifiedTag) SetStatus($"A ZIP that could not be verified is installed. {_release.Tag} is the latest release." + next);
             else if (recorded) SetStatus($"Version {record!.Tag} is installed. {_release.Tag} is available." + next);
             else if (installed) SetStatus("Seamless Co-Op is installed, but its version cannot be verified." + next);
             else SetStatus("Seamless Co-Op is not installed." + next);
-            _version.Text = "Latest published release: " + _release.Tag + (_release.Prerelease ? " (beta)" : "");
+            _version.Text = "GitHub mirror: " + _release.Tag + (_release.Prerelease ? " (beta)" : "");
+            try
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+                var minimum = await new ModVersionPolicy(_http).GetMinimumAsync(timeout.Token);
+                var behind = ModVersionPolicy.MirrorIsBehind(_release.Tag, minimum);
+                if (behind == true)
+                {
+                    _current = false; _found = null;
+                    SetStatus($"The author requires v{minimum}. GitHub still lists {_release.Tag}. Get the current ZIP from Nexus, then choose Install from ZIP.");
+                    _version.Text += $" · Author minimum: v{minimum}";
+                }
+                else if (behind is null)
+                {
+                    _current = false; _found = null;
+                    SetStatus("The author's version could not be compared with the GitHub release. Check Nexus for the current ZIP.");
+                }
+                else
+                {
+                    _modDownloadUrl = ReleaseCatalog.ReleasePageUrl(_release.Tag);
+                    if (_current) SetStatus("Installed files match the current GitHub release and the author's version policy.");
+                }
+            }
+            catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException or InvalidDataException)
+            {
+                _current = false; _found = null;
+                SetStatus((installed ? "Seamless Co-Op is installed. " : "Seamless Co-Op is not installed. ") + "The author's version policy could not be checked. Check Nexus for the current ZIP; installed-game launch remains available.");
+                _version.Text += " · Author version unavailable";
+            }
         }
         catch (Exception ex)
         {
