@@ -10,6 +10,8 @@ var tests = new (string Name, Action Run)[]
     ("Game folder accepts root or Game", TestGamePath),
     ("Steam library discovery finds custom library", TestSteam),
     ("Release selection includes beta and rejects ambiguous ZIPs", TestRelease),
+    ("Author version policy catches a stale GitHub mirror without guessing", TestAuthorVersionPolicy),
+    ("Live author policy and release mirror can be compared", TestLiveAuthorPolicy),
     ("Archive validates layout and blocks traversal", TestArchive),
     ("Update preserves settings and can roll back", TestInstall),
     ("Manual binary comparison recognizes current install", TestFingerprint)
@@ -174,6 +176,40 @@ static void TestLockedLauncher()
     }
     Equal("old", File.ReadAllText(Path.Combine(game, "ersc_launcher.exe")));
     Equal("old", File.ReadAllText(Path.Combine(game, "SeamlessCoop", "ersc.dll")));
+}
+static void TestAuthorVersionPolicy()
+{
+    const string policy = "1.98 0\r\n2.00 0\r\n2.01 0\r\n>2.02 1\r\n";
+    Equal(new Version(2, 0, 2), ModVersionPolicy.Parse(policy));
+    Equal<bool?>(true, ModVersionPolicy.MirrorIsBehind("v2.0.1", ModVersionPolicy.Parse(policy)));
+    Equal<bool?>(false, ModVersionPolicy.MirrorIsBehind("v2.0.2", ModVersionPolicy.Parse(policy)));
+    Equal<bool?>(false, ModVersionPolicy.MirrorIsBehind("v2.0.3", ModVersionPolicy.Parse(policy)));
+    Equal(null, ModVersionPolicy.MirrorIsBehind("unknown", ModVersionPolicy.Parse(policy)));
+    Equal(null, ModVersionPolicy.MirrorIsBehind("v1.10.0", ModVersionPolicy.Parse(policy)));
+    foreach (var malformed in new[] { "", "<html>offline</html>", "2.01 0", ">2.02 0", ">2.02 1\n>2.03 1", ">2.02 1\n2.01 bad" })
+    {
+        try { ModVersionPolicy.Parse(malformed); throw new Exception("accepted malformed author policy"); }
+        catch (InvalidDataException) { }
+    }
+    using var client = new HttpClient(new FakeHandler(request =>
+    {
+        Equal("https://raw.githubusercontent.com/yuiamoroll/EldenRingSeamlessCoopRelease/main/VERSION", request.RequestUri!.AbsoluteUri);
+        return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(policy) };
+    }));
+    Equal(new Version(2, 0, 2), new ModVersionPolicy(client).GetMinimumAsync().GetAwaiter().GetResult());
+    using var offline = new HttpClient(new FakeHandler(_ => throw new HttpRequestException("offline")));
+    try { new ModVersionPolicy(offline).GetMinimumAsync().GetAwaiter().GetResult(); throw new Exception("offline policy claimed current"); }
+    catch (HttpRequestException) { }
+}
+static void TestLiveAuthorPolicy()
+{
+    if (Environment.GetEnvironmentVariable("ERSC_LIVE_POLICY") != "1") { Console.WriteLine("  SKIP: set ERSC_LIVE_POLICY=1 for author policy integration"); return; }
+    using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+    var minimum = new ModVersionPolicy(client).GetMinimumAsync().GetAwaiter().GetResult();
+    var mirror = new GitHubReleases(client).GetNewestAsync().GetAwaiter().GetResult();
+    var behind = ModVersionPolicy.MirrorIsBehind(mirror.Tag, minimum);
+    True(behind is not null);
+    Console.WriteLine($"  Author minimum v{minimum}; GitHub {mirror.Tag}; mirror behind: {behind}");
 }
 static void TestRealArchive()
 {

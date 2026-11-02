@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.7.1 — Unreleased
+
+- Check the mod author's version policy as well as the GitHub release mirror. When Nexus has a required version ahead of GitHub, explain the mismatch and open Nexus from **Get latest release**.
+- If the author's policy is unavailable or cannot be compared, say so instead of claiming the mod is up to date. Installed-game launch remains available.
+
 ## 1.7.0 — 2026-09-23
 
 - The launcher no longer downloads Seamless Co-Op. Select **Get latest release** (or **Nexus page**) to download the ZIP yourself, then **Install from ZIP…**. The mod's author does not allow redistribution, so the mod now always comes from the author's own pages.
