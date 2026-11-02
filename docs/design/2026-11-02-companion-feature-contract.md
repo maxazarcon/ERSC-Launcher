@@ -10,7 +10,7 @@ Figma: https://www.figma.com/design/uwB6ruY6RRFTEW6zuoSF6G?node-id=9-33
 
 Audited `MainWindow.cs`, `SettingPresentation.cs`, `StateStore.cs`, `SteamIntegration.cs`, `App.cs`, `OverlayDialog.cs`, `OnScreenKeyboard.cs`, README, and the player's existing v2.0.1 ZIP's default INI. Do not read or expose the player's password. All 17 default INI keys have named editable design controls; the Figma audit returned no missing keys.
 
-Nexus v2.0.2 is newer than the GitHub mirror and has not yet been downloaded or inspected locally. Future/new INI keys must remain visible through the existing text fallback. Do not claim the 17-key inventory is an exhaustive v2.0.2 schema.
+The author-downloaded Nexus v2.0.2 ZIP was inspected on November 2 and contains the same 17 INI keys. Future/new keys remain visible through the text fallback. Live installation preserved all 17 prior values and matched new binaries to the author ZIP; Max confirmed the game ran after the update.
 
 ## Settings coverage
 
@@ -85,4 +85,4 @@ Controller-supported is informational, not a button. Automatic game detection an
 
 Removed password reveal, reset changes and a manual controller-mode switch. Corrected unsupported name-display value “Character name” to the real Normal option. No friends-online count, party presence, character stats, playtime, cloud sync, achievements or save-browser feature is designed. Steam running may use `SteamClient.IsRunning()`; it must never be represented as proof of online co-op connectivity.
 
-Official scene artwork is a design reference. Resolve distribution rights or replace it before packaging. The design is pending Max's approval; no redesigned product UI has been written.
+Official scene artwork remains a Figma-only reference; the public app uses the original landscape approved in release frames `31:57` and `31:133`. Max approved the actual Figma designs on November 2. Local implementation and verification are recorded in the companion implementation plan; public release of the original-art version was authorized by Max on November 2.
